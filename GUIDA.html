@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Drinko · guida di avvio</title>
+<style>
+:root{--bg:#fbfaf7;--fg:#1d1b24;--muted:#6a6577;--line:#e3e0d8;--card:#fff;--accent:#d6245a;--ok:#13795b;--warn:#8a5a00;--code:#f1eee8}
+@media (prefers-color-scheme:dark){:root{--bg:#121118;--fg:#efecf7;--muted:#a29db4;--line:#2d2939;--card:#1a1822;--accent:#ff6b97;--ok:#4fe0a0;--warn:#ffc24d;--code:#24212e}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:24px max(16px,env(safe-area-inset-right)) 64px max(16px,env(safe-area-inset-left))}
+main{max-width:760px;margin:0 auto}
+h1{font-size:30px;line-height:1.15;margin:0 0 8px}
+h2{font-size:22px;margin:40px 0 10px;line-height:1.25}
+h3{font-size:17px;margin:22px 0 6px}
+p,ul,ol{margin:8px 0}
+li{margin:4px 0}
+code,pre{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13.5px}
+code{background:var(--code);padding:1px 6px;border-radius:5px;word-break:break-word}
+pre{background:var(--code);padding:12px 14px;border-radius:10px;overflow-x:auto;margin:10px 0}
+pre code{background:none;padding:0}
+.lead{color:var(--muted);font-size:17px}
+.box{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:14px 0}
+.box.ok{border-color:var(--ok)}
+.box.warn{border-color:var(--warn)}
+.box b.t{display:block;margin-bottom:4px}
+.step{display:flex;gap:12px;align-items:baseline}
+.step .n{flex:none;font-weight:700;color:var(--accent);min-width:26px}
+table{border-collapse:collapse;width:100%;font-size:14.5px;display:block;overflow-x:auto}
+td,th{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+th{background:var(--code)}
+.tick{color:var(--ok);font-weight:700}
+.todo{color:var(--warn);font-weight:700}
+a{color:var(--accent)}
+</style>
+</head>
+<body>
+<main>
+<h1>Drinko · guida di avvio</h1>
+<p class="lead">Come mettere online il sito per le discoteche, collegare i pagamenti e consegnarlo ai clienti. Non serve saper programmare: si copia e si incolla. I nomi dei menu di Supabase e Stripe possono cambiare un po' nel tempo, ma i passi restano questi.</p>
+
+<div class="box">
+<b class="t">Cosa c'è nella cartella</b>
+<ul>
+<li><code>web/</code> il sito: <code>index.html</code> (cliente), <code>bar.html</code> (barista), <code>admin.html</code> (collega un locale a Stripe), <code>qr.html</code> (stampa i QR dei tavoli), <code>config.js</code> (le tue impostazioni).</li>
+<li><code>web/privacy.html</code>: l’informativa privacy che i clienti trovano in fondo alla pagina. È una <b>bozza</b>: prima di metterla online sostituisci i punti tra [parentesi quadre] e falla rivedere dal commercialista o da un consulente privacy.</li>
+<li><code>supabase/schema.sql</code> e <code>seed.sql</code>: il database e un locale di esempio.</li>
+<li><code>supabase/functions/</code>: le cinque funzioni che creano il pagamento, ricevono la conferma da Stripe, collegano i locali, rimborsano gli ordini annullati e caricano i menu.</li>
+<li><code>tests/</code>: prove automatiche. Non ti servono per usare il sito.</li>
+</ul>
+</div>
+
+<h2>Come funziona, in breve</h2>
+<ol>
+<li>Il cliente inquadra il QR del tavolo, sceglie i drink e paga su una pagina sicura di Stripe (carta, Apple Pay, Google Pay).</li>
+<li>Quando Stripe conferma il pagamento, l'ordine compare sul tablet del barista con un suono.</li>
+<li>Il barista tocca "Prendi in carico", poi "Segna pronto". Il cliente vede l'avanzamento e, se tiene aperta la pagina, riceve un avviso con suono e vibrazione.</li>
+<li>I soldi dei drink vanno al conto del <b>locale</b>. A te restano i <b>0,49 €</b> per ordine, pagati dal cliente come "costo del servizio". Le commissioni di pagamento di Stripe le paga il locale, perché i locali sono collegati come account Stripe Standard con addebito diretto.</li>
+</ol>
+
+<div class="box ok">
+<b class="t">Cosa è stato provato e cosa no</b>
+<table>
+<tr><th>Parte</th><th>Stato</th></tr>
+<tr><td>Calcolo dei prezzi, ordine, pagamento con 0,49 € di commissione, controllo della firma di Stripe, collegamento del locale (21 prove automatiche con Supabase e Stripe simulati)</td><td class="tick">Provato</td></tr>
+<tr><td>Schermate cliente, barista e admin in un browser vero, con dati simulati</td><td class="tick">Provato</td></tr>
+<tr><td>QR dei tavoli: generati e riletti con un lettore QR</td><td class="tick">Provato</td></tr>
+<tr><td>Database (<code>schema.sql</code>) su un Supabase vero, funzioni pubblicate, pagamento vero con Stripe</td><td class="todo">Non provato: lo scopri nella prova generale (passo 9)</td></tr>
+</table>
+<p>Per questo la prova generale in modalità di prova di Stripe è obbligatoria prima di andare in un locale.</p>
+</div>
+
+<h2>Prima di cominciare, tieni pronti</h2>
+<ul>
+<li>Una email per gli account (Supabase, Stripe, hosting).</li>
+<li>I dati della tua attività e un IBAN per Stripe. Per fatturare ai locali serve normalmente una partita IVA: confermalo col commercialista.</li>
+<li>Il nome corto del primo locale, in minuscolo e senza spazi (per esempio <code>aurora</code>). Compare nell'indirizzo dei QR.</li>
+</ul>
+
+<h2>Passo 1 · Il database (Supabase)</h2>
+<ol>
+<li>Crea un account su supabase.com e un <b>nuovo progetto</b>. Scegli una regione europea. Segnati la password del database.</li>
+<li>Apri <b>SQL Editor</b> → nuova query. Incolla tutto il contenuto di <code>supabase/schema.sql</code> e premi <b>Run</b>. Deve finire senza errori. Se lo avevi già lanciato con una versione precedente, rilancialo: si può ripetere senza problemi e aggiunge le novità (note per il barista, drink esauriti).</li>
+<li>Nuova query: incolla <code>supabase/seed.sql</code> e premi <b>Run</b>. Crea un locale di esempio ("aurora") con il menu.</li>
+<li>Vai in <b>Project Settings → API</b>. Copia due cose: <b>Project URL</b> e la chiave <b>anon public</b>.</li>
+</ol>
+<div class="box warn"><b class="t">Attenzione</b>La chiave <b>service_role</b> è segreta: non incollarla mai nel sito né mandarla a nessuno. La chiave anon invece è fatta per stare nel sito.</div>
+
+<h2>Passo 2 · Stripe in modalità di prova</h2>
+<ol>
+<li>Crea un account su stripe.com e resta in <b>modalità test</b> (interruttore in alto).</li>
+<li>Attiva <b>Connect</b> dal menu (è il servizio che manda i soldi ai locali) e scegli che sei una piattaforma che fa incassare altre attività. Completa il profilo che ti chiede.</li>
+<li>In <b>Developers → API keys</b> copia la <b>Secret key</b> di prova (inizia con <code>sk_test_</code>).</li>
+</ol>
+
+<h2>Passo 3 · Le cinque funzioni su Supabase</h2>
+<p>In Supabase apri <b>Edge Functions</b> → <b>Deploy a new function</b> → <b>Via Editor</b>. Fai questo cinque volte, usando <b>esattamente</b> questi nomi:</p>
+<table>
+<tr><th>Nome della funzione</th><th>File da incollare</th><th>Verify JWT</th></tr>
+<tr><td><code>create-checkout</code></td><td><code>supabase/functions/create-checkout/index.ts</code></td><td>lascia attivo</td></tr>
+<tr><td><code>connect-link</code></td><td><code>supabase/functions/connect-link/index.ts</code></td><td>lascia attivo</td></tr>
+<tr><td><code>refund-order</code></td><td><code>supabase/functions/refund-order/index.ts</code></td><td>lascia attivo</td></tr>
+<tr><td><code>admin-menu</code></td><td><code>supabase/functions/admin-menu/index.ts</code></td><td>lascia attivo (usa la stessa chiave admin delle altre)</td></tr>
+<tr><td><code>stripe-webhook</code></td><td><code>supabase/functions/stripe-webhook/index.ts</code></td><td><b>disattivalo</b> (Stripe non manda la chiave di Supabase: la funzione controlla da sola la firma di Stripe)</td></tr>
+</table>
+<p>Ogni volta cancella il codice di esempio, incolla il file e premi <b>Deploy</b>.</p>
+<p>Poi vai in <b>Edge Functions → Secrets</b> e aggiungi questi quattro (Supabase aggiunge da solo l'indirizzo del progetto e la chiave di servizio):</p>
+<table>
+<tr><th>Nome</th><th>Valore</th></tr>
+<tr><td><code>STRIPE_SECRET_KEY</code></td><td>la chiave <code>sk_test_...</code> del passo 2</td></tr>
+<tr><td><code>SITE_URL</code></td><td>l'indirizzo del sito, che avrai al passo 4 (senza <code>/</code> finale)</td></tr>
+<tr><td><code>ADMIN_KEY</code></td><td>una password lunga inventata da te: serve per usare <code>admin.html</code></td></tr>
+<tr><td><code>STRIPE_WEBHOOK_SECRET</code></td><td>lo avrai al passo 5</td></tr>
+</table>
+
+<h2>Passo 4 · Il sito online</h2>
+<ol>
+<li>Apri <code>web/config.js</code> con un editor di testo e incolla il Project URL e la chiave anon del passo 1. Se vuoi, cambia <code>defaultClub</code>.</li>
+<li>Metti online la cartella <code>web</code> su un servizio che ospita siti statici (per esempio Netlify, Cloudflare Pages o Vercel: di solito basta trascinare la cartella nella pagina di caricamento). Segui le istruzioni del servizio che scegli.</li>
+<li>Il servizio ti dà un indirizzo, tipo <code>https://qualcosa.netlify.app</code>. Incollalo nel secret <code>SITE_URL</code> del passo 3.</li>
+</ol>
+
+<h2>Passo 5 · Dire a Stripe dove avvisarti</h2>
+<ol>
+<li>In Stripe: <b>Developers → Webhooks → Add endpoint</b>.</li>
+<li>Indirizzo: <code>https://IL-TUO-PROGETTO.supabase.co/functions/v1/stripe-webhook</code> (il Project URL del passo 1 più <code>/functions/v1/stripe-webhook</code>).</li>
+<li>Scegli di ascoltare gli eventi degli <b>account collegati (Connect)</b>, non solo quelli del tuo account.</li>
+<li>Eventi da selezionare: <code>checkout.session.completed</code>, <code>checkout.session.async_payment_succeeded</code>, <code>checkout.session.expired</code>.</li>
+<li>Salva e copia il <b>Signing secret</b> (inizia con <code>whsec_</code>). Incollalo nel secret <code>STRIPE_WEBHOOK_SECRET</code>.</li>
+</ol>
+
+<h2>Passo 6 · Collegare il locale a Stripe</h2>
+<ol>
+<li>Apri <code>https://IL-TUO-SITO/admin.html</code>.</li>
+<li>Scrivi il nome corto del locale (<code>aurora</code>) e la tua <code>ADMIN_KEY</code>, poi premi <b>Crea il link</b>.</li>
+<li>Manda il link al gestore. Lui inserisce i dati dell'attività, i documenti e l'IBAN su Stripe. In modalità di prova Stripe permette di compilare con dati finti.</li>
+<li>Da quel momento il locale può incassare. Il locale ha una sua area Stripe dove vede i pagamenti e può fare rimborsi.</li>
+</ol>
+
+<h2>Passo 7 · Il personale del bar</h2>
+<ol>
+<li>In Supabase: <b>Authentication → Users → Add user</b>. Crea email e password del barista (o del gestore).</li>
+<li>In <b>SQL Editor</b> collegalo al locale, cambiando l'email:
+<pre><code>insert into staff (user_id, club_id)
+select id, 'aurora' from auth.users where email = 'barista@esempio.it';</code></pre></li>
+<li>Apri <code>https://IL-TUO-SITO/bar.html</code> sul tablet o telefono del bar ed entra.</li>
+</ol>
+
+<h2>Passo 8 · Il menu del locale vero</h2>
+<ul>
+<li>In Supabase, <b>Table Editor → clubs</b>: cambia il nome del locale (colonna <code>name</code>).</li>
+<li><b>Il modo più facile:</b> apri <code>admin.html</code> sul tuo sito, nel riquadro <b>Crea un locale e il suo menu</b> scrivi nome corto, nome del locale e incolla l'elenco dei drink (una riga ciascuno: <code>Categoria | Nome | Descrizione | Prezzo</code>, per esempio <code>Cocktail | Gin Tonic | Gin, tonica | 10</code>). Premi <b>Salva</b> e ti mostra il link per i clienti. Puoi rilanciarlo quando cambia il menu.</li>
+<li><b>Modo avanzato, Table Editor → menu_items</b>: modifica, togli o aggiungi drink. I prezzi sono in <b>centesimi</b> (1000 = 10,00 €). Togliere la spunta da <code>available</code> nasconde un drink finito. Durante la serata il barista lo fa da solo dalla schermata del bar, con il tasto <b>Disponibilità drink</b>.</li>
+<li>Per una foto vera, scrivi l'indirizzo di un'immagine nella colonna <code>image_url</code>. Senza foto, il sito mostra il disegno del bicchiere (colonne <code>glass</code>, <code>color</code>, <code>garnish</code>).</li>
+<li>Per un secondo locale, aggiungi una riga in <code>clubs</code> con un nome corto diverso e i suoi drink in <code>menu_items</code>, poi ripeti i passi 6 e 7 per lui.</li>
+</ul>
+
+<h2>Passo 9 · Prova generale (obbligatoria)</h2>
+<ol>
+<li>Apri <code>https://IL-TUO-SITO/index.html?club=aurora&amp;table=5</code> sul telefono.</li>
+<li>Aggiungi due drink, premi <b>Vai al pagamento</b>, poi <b>Paga</b>. Verifica che il totale comprenda il costo del servizio da 0,49 €.</li>
+<li>Su Stripe usa la carta di prova <code>4242 4242 4242 4242</code>, una data futura qualsiasi e un codice qualsiasi.</li>
+<li>Torni al sito e vedi "Ordine ricevuto". Sul tablet del bar (<code>bar.html</code>) l'ordine compare con un suono.</li>
+<li>Tocca "Prendi in carico", poi "Segna pronto". Sul telefono del cliente deve comparire l'avviso "Il tuo drink è pronto".</li>
+<li>In Stripe, nella parte del locale, controlla che i soldi dei drink siano suoi e che i 0,49 € risultino a te come commissione della piattaforma.</li>
+<li>Fai un secondo ordine di prova e sul bar premi <b>Annulla e rimborsa</b> → <b>Sì, rimborsa</b>. In Stripe il pagamento deve risultare rimborsato per intero, 0,49 € compresi, e sul telefono del cliente compare "Ordine annullato".</li>
+</ol>
+<div class="box"><b class="t">Se qualcosa non va</b>
+<ul>
+<li>L'ordine resta su "Sto confermando il pagamento": controlla in Stripe → Webhooks se gli eventi arrivano e con quale risposta. Di solito manca <code>STRIPE_WEBHOOK_SECRET</code> o il webhook non ascolta gli account collegati.</li>
+<li>Errore al pagamento: in Supabase, <b>Edge Functions → create-checkout → Logs</b> dice il motivo. Spesso il locale non ha ancora completato il collegamento a Stripe.</li>
+<li>Il barista non vede ordini: controlla di aver collegato la sua email al locale (passo 7).</li>
+</ul></div>
+
+<h2>Gli ultimi 3 passi per consegnarlo ai clienti</h2>
+<div class="box">
+<div class="step"><span class="n">1</span><div><b>Prova generale con il locale, in modalità di prova.</b> Fai tutto il passo 9 insieme al gestore o al barista, con due telefoni. Se un passaggio non funziona, correggilo adesso, non la sera dell'apertura.</div></div>
+<div class="step"><span class="n">2</span><div><b>Passa ai pagamenti veri.</b>
+<ul>
+<li>In Stripe esci dalla modalità di prova e attiva l'account vero, con i tuoi dati e il tuo IBAN.</li>
+<li>Cambia nei secret la chiave in <code>sk_live_...</code> e crea un nuovo webhook anche in modalità reale, con il suo nuovo <code>whsec_...</code>.</li>
+<li>Gli account di prova non valgono in modalità reale: in Supabase lancia <code>update clubs set stripe_account_id = null where id = 'aurora';</code>, poi rifai il passo 6 con il gestore, con i suoi dati veri.</li>
+<li>Con il commercialista chiarisci fatturazione dei 0,49 € e scontrini del locale. Fai firmare al gestore un accordo semplice (prova gratuita, costo del servizio, chi gestisce rimborsi). Metti sul sito una informativa privacy e le condizioni d'uso.</li>
+</ul></div></div>
+<div class="step"><span class="n">3</span><div><b>La serata di avvio.</b> Stampa i QR da <code>qr.html</code> (uno per tavolo e uno per il bancone). Lascia al bar un tablet carico con <code>bar.html</code> già aperto e il volume alto. Fai un ordine vero da pochi euro e rimborsalo da Stripe per verificare tutto. Sii presente la prima sera per aiutare barista e clienti.</div></div>
+</div>
+
+<h2>Limiti da sapere</h2>
+<ul>
+<li>L'avviso "drink pronto" arriva solo se il cliente tiene aperta la pagina. Per avvisare a schermo spento servirebbero SMS o WhatsApp: è un'aggiunta da fare dopo.</li>
+<li>I rimborsi si fanno dall'area Stripe del locale. La schermata del barista non li gestisce.</li>
+<li>Non ci sono ancora un limite di richieste contro gli abusi né l'elenco ordini storico: i dati restano nel database e si vedono in Supabase.</li>
+<li>Gli ordini mai pagati restano nel database come "in attesa". Ogni tanto puoi cancellarli con la riga indicata in fondo a <code>schema.sql</code>.</li>
+<li>Il costo di Stripe sui pagamenti (circa 1,5% + 0,25 € per le carte europee standard, più alto per le carte premium) lo paga il locale. Controlla le tariffe aggiornate sul sito di Stripe.</li>
+<li>Questa guida è un aiuto tecnico, non una consulenza fiscale o legale: per partita IVA, fatture, scontrini, privacy e alcol rivolgiti a un commercialista o a un avvocato.</li>
+</ul>
+</main>
+</body>
+</html>

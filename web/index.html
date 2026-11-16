@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Drinko</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap">
+<link rel="stylesheet" href="style.css">
+<script src="config.js"></script>
+<script src="art.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <div class="err" id="err" hidden></div>
+  <main id="main"><p class="note">Caricamento… / Loading…</p></main>
+  <footer class="legal"><a href="privacy.html">Privacy</a></footer>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script>
+/* Pagina del cliente. Si apre dal QR del tavolo: index.html?club=aurora&table=12 */
+(function () {
+  var cfg = window.APP, qs = new URLSearchParams(location.search);
+  var S = {
+    club: (qs.get('club') || cfg.defaultClub || '').toLowerCase(),
+    table: (qs.get('table') || '').trim().slice(0, 20),
+    screen: 'loading', info: null, menu: [], cat: null, cart: {}, mode: null,
+    busy: false, err: '', order: null, data: null, age: false, note: '', fromReturn: false,
+    lang: ((qs.get('lang') || load('bancone_lang') || (/^it/i.test(navigator.language || 'it') ? 'it' : 'en')) === 'en') ? 'en' : 'it'
+  };
+  var timer = null, ac = null, wake = null, lastSeen = '', baseTitle = document.title;
+
+  function tr(it, en) { return S.lang === 'en' ? en : it; }
+  function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function eur(c) { return (c / 100).toLocaleString(S.lang === 'en' ? 'en-IE' : 'it-IT', { style: 'currency', currency: 'EUR' }); }
+  function store(k, v) { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+  function load(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } }
+  function api(path, init) {
+    init = init || {};
+    init.headers = Object.assign({ apikey: cfg.anonKey, Authorization: 'Bearer ' + cfg.anonKey, 'Content-Type': 'application/json' }, init.headers || {});
+    return fetch(cfg.supabaseUrl + path, init).then(function (r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); });
+  }
+
+  /* ---------- Carrello ---------- */
+  function lines() {
+    return S.menu.filter(function (m) { return S.cart[m.id] > 0; }).map(function (m) { return { id: m.id, n: m.name, q: S.cart[m.id], p: m.price_cents }; });
+  }
+  function count() { return lines().reduce(function (s, l) { return s + l.q; }, 0); }
+  function subtotal() { return lines().reduce(function (s, l) { return s + l.q * l.p; }, 0); }
+  function fee() { return S.info ? S.info.service_fee_cents : 0; }
+  function place() { return S.mode === 'tavolo' ? tr('Tavolo ', 'Table ') + (S.table || '?') : tr('Bancone', 'Bar'); }
+
+  /* ---------- Schermate ---------- */
+  function thumb(m) {
+    var inner = m.image_url ? '<img src="' + esc(m.image_url) + '" alt="" loading="lazy">' : art(m.glass, m.color, m.garnish);
+    return '<div class="thumb" aria-hidden="true">' + inner + '</div>';
+  }
+  function cats() {
+    var out = []; S.menu.forEach(function (m) { if (out.indexOf(m.category) < 0) out.push(m.category); }); return out;
+  }
+  function viewMenu() {
+    var cs = cats();
+    if (!S.cat || cs.indexOf(S.cat) < 0) S.cat = cs[0];
+    var tabs = cs.map(function (c) { return '<button data-act="cat" data-v="' + esc(c) + '" aria-pressed="' + (S.cat === c) + '">' + esc(c) + '</button>'; }).join('');
+    var items = S.menu.filter(function (m) { return m.category === S.cat; }).map(function (m) {
+      var q = S.cart[m.id] || 0;
+      var ctl = q === 0
+        ? '<button class="add" data-act="inc" data-id="' + esc(m.id) + '" aria-label="' + tr('Aggiungi ', 'Add ') + esc(m.name) + '">+</button>'
+        : '<div class="step"><button class="minus" data-act="dec" data-id="' + esc(m.id) + '" aria-label="' + tr('Togli ', 'Remove ') + esc(m.name) + '">−</button><output>' + q + '</output><button data-act="inc" data-id="' + esc(m.id) + '" aria-label="' + tr('Aggiungi ', 'Add ') + esc(m.name) + '">+</button></div>';
+      return '<li class="item"><div class="lead">' + thumb(m) + '<div class="info"><h3>' + esc(m.name) + '</h3><p>' + esc(m.description) + '</p></div></div><div class="buy"><span class="price">' + eur(m.price_cents) + '</span>' + ctl + '</div></li>';
+    }).join('');
+    var n = count();
+    var bar = n > 0 ? '<button class="cartbar" data-act="checkout"><span>' + tr('Vai al pagamento · ', 'Go to payment · ') + n + (n === 1 ? ' drink' : ' drinks') + '</span><span>' + eur(subtotal()) + '</span></button>' : '';
+    var chip = (S.table ? '<span class="chip">' + tr('Tavolo ', 'Table ') + esc(S.table) + '</span>' : '') + '<button class="lang" data-act="lang" aria-label="Language">' + (S.lang === 'en' ? 'IT' : 'EN') + '</button>';
+    return '<section class="phone"><header class="club"><div><p class="eyebrow">Menu</p><h1>' + esc(S.info.name) + '</h1></div>' + chip + '</header>'
+      + '<nav class="cats" aria-label="' + tr('Categorie', 'Categories') + '">' + tabs + '</nav><ul class="menu">' + (items || '<li class="small">' + tr('Nessun drink in questa categoria.', 'No drinks in this category.') + '</li>') + '</ul>' + bar + '</section>';
+  }
+  function viewCheckout() {
+    var ls = lines().map(function (l) { return '<li><span><span class="q">' + l.q + ' ×</span> ' + esc(l.n) + '</span><span>' + eur(l.q * l.p) + '</span></li>'; }).join('');
+    var feeRow = fee() > 0 ? '<li><span>' + tr('Costo del servizio', 'Service fee') + '</span><span>' + eur(fee()) + '</span></li>' : '';
+    var modes = [['tavolo', tr('Al tavolo', 'To my table')], ['bancone', tr('Ritiro al bancone', 'Pick up at the bar')]].map(function (m) {
+      return '<button data-act="mode" data-v="' + m[0] + '" aria-pressed="' + (S.mode === m[0]) + '">' + m[1] + '</button>';
+    }).join('');
+    var tableField = (S.mode === 'tavolo' && !qs.get('table'))
+      ? '<div><p class="field-title">' + tr('Il tuo tavolo', 'Your table') + '</p><input class="input" id="table" inputmode="numeric" maxlength="20" placeholder="' + tr('Numero del tavolo', 'Table number') + '" value="' + esc(S.table) + '"></div>' : '';
+    return '<section class="phone"><div class="sheet"><button class="back" data-act="back">' + tr('← Torna al menu', '← Back to menu') + '</button><h2>' + tr('Il tuo ordine', 'Your order') + '</h2>'
+      + '<ul class="lines">' + ls + feeRow + '</ul><div class="total"><span>' + tr('Totale', 'Total') + '</span><span>' + eur(subtotal() + fee()) + '</span></div>'
+      + '<div><p class="field-title">' + tr('Dove lo vuoi?', 'Where do you want it?') + '</p><div class="opts">' + modes + '</div></div>' + tableField
+      + '<div><p class="field-title">' + tr('Note per il barista', 'Note for the bartender') + ' <span class="small">' + tr('(facoltative)', '(optional)') + '</span></p><input class="input" id="note" maxlength="140" placeholder="' + tr('Es. senza ghiaccio, poco zucchero', 'E.g. no ice, less sugar') + '" value="' + esc(S.note) + '"></div>'
+      + '<label class="check"><input type="checkbox" data-act="age"' + (S.age ? ' checked' : '') + '><span>' + tr('Ho almeno 18 anni. I drink alcolici si consegnano solo a maggiorenni: al ritiro può servire un documento.', 'I am at least 18. Alcohol is only served to adults: you may be asked for ID.') + '</span></label>'
+      + '<button class="pay" data-act="pay"' + (S.busy ? ' disabled' : '') + '>' + (S.busy ? tr('Un attimo…', 'One moment…') : tr('Paga ', 'Pay ') + eur(subtotal() + fee())) + '</button>'
+      + '<p class="small">' + tr('Paghi in modo sicuro con carta, Apple Pay o Google Pay sulla pagina di pagamento.', 'You pay securely by card, Apple Pay or Google Pay on the payment page.') + '</p></div></section>';
+  }
+  function viewStatus() {
+    var o = S.data;
+    if (!o) return '<section class="phone"><div class="sheet"><p class="note">' + tr('Sto cercando il tuo ordine…', 'Looking for your order…') + '</p></div></section>';
+    var where = o.mode === 'tavolo' ? tr('Tavolo ', 'Table ') + esc(o.table_label) : tr('Bancone', 'Bar');
+    if (o.status === 'canceled') return '<section class="phone"><div class="sheet"><h2>' + tr('Ordine annullato', 'Order canceled') + '</h2><p class="small">' + tr('Se avevi già pagato, il bar ti rimborsa tutto: l’importo torna sulla tua carta in alcuni giorni lavorativi. Altrimenti non ti è stato addebitato nulla.', 'If you had already paid, the bar refunds everything: the money returns to your card within a few working days. Otherwise you have not been charged.') + '</p><button class="pay" data-act="newOrder">' + tr('Torna al menu', 'Back to menu') + '</button></div></section>';
+    if (o.status === 'done') return '<section class="phone"><div class="sheet"><h2>' + tr('Ordine consegnato', 'Order delivered') + '</h2><p class="small">' + tr('Buona serata.', 'Enjoy your night.') + '</p><button class="pay" data-act="newOrder">' + tr('Ordina ancora', 'Order again') + '</button></div></section>';
+    if (o.status === 'pending_payment') return '<section class="phone"><div class="sheet"><p class="eyebrow">' + esc(S.info.name) + '</p><h2>' + tr('Sto confermando il pagamento…', 'Confirming your payment…') + '</h2><p class="small">' + tr('Ci vuole qualche secondo. Non chiudere questa pagina.', 'It takes a few seconds. Do not close this page.') + '</p></div></section>';
+    var idx = { 'new': 0, prep: 1, ready: 2 }[o.status];
+    var steps = [tr('Ordine ricevuto', 'Order received'), tr('In preparazione', 'Being prepared'), tr('Pronto', 'Ready')].map(function (l, i) {
+      return '<li class="' + (i < idx ? 'done' : i === idx ? 'now' : '') + '"><span class="dot"></span>' + l + '</li>';
+    }).join('');
+    var ready = o.status === 'ready'
+      ? '<div class="ready-box"><b>' + tr('È pronto.', 'It’s ready.') + '</b> ' + (o.mode === 'tavolo' ? tr('Sta arrivando al ', 'On its way to ') + where.toLowerCase() + '.' : tr('Vai al bancone e mostra il numero #', 'Go to the bar and show number #') + o.number + '.') + '</div>' : '';
+    var ls = (o.items || []).map(function (i) { return '<li><span><span class="q">' + i.q + ' ×</span> ' + esc(i.name) + '</span></li>'; }).join('');
+    return '<section class="phone"><div class="sheet"><p class="eyebrow">' + esc(S.info.name) + tr(' · il tuo numero', ' · your number') + '</p><p class="big-num">#' + o.number + '</p>'
+      + '<p>' + (o.mode === 'tavolo' ? tr('Te lo portiamo al ', 'We bring it to your ') + where.toLowerCase() + '.' : tr('Ritiralo al bancone.', 'Pick it up at the bar.')) + tr(' Pagato ', ' Paid ') + eur(o.subtotal_cents + o.fee_cents) + '.</p>' + ready
+      + '<ul class="steps">' + steps + '</ul><ul class="lines">' + ls + '</ul>'
+      + (o.status !== 'ready' && !soundReady() ? '<button class="ghost" data-act="sound">🔔 ' + tr('Attiva il suono dell’avviso', 'Turn on the alert sound') + '</button>' : '')
+      + '<p class="small">' + tr('Tieni aperta questa pagina: quando il drink è pronto compare un avviso con suono e vibrazione.', 'Keep this page open: when your drink is ready you get an alert with sound and vibration.') + '</p></div></section>';
+  }
+  function viewError(msg) { return '<section class="phone"><div class="sheet"><h2>' + tr('Ops', 'Oops') + '</h2><p>' + esc(msg) + '</p></div></section>'; }
+
+  function render() {
+    var er = document.getElementById('err'); er.hidden = !S.err; er.textContent = S.err;
+    var html;
+    if (S.screen === 'error') html = viewError(S.errMsg);
+    else if (S.screen === 'loading') html = '<p class="note">' + tr('Caricamento…', 'Loading…') + '</p>';
+    else if (S.screen === 'status') html = viewStatus();
+    else if (S.screen === 'checkout') html = viewCheckout();
+    else html = viewMenu();
+    document.getElementById('main').innerHTML = html;
+  }
+
+  /* ---------- Avviso "drink pronto" ---------- */
+  function unlockAudio() {
+    try {
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      ac = ac || new Ctx();
+      if (ac.state === 'suspended') ac.resume();
+    } catch (e) {}
+  }
+  function soundReady() { return !!ac && ac.state === 'running'; }
+  function tone(seq, vol) {
+    try {
+      unlockAudio(); if (!ac) return;
+      seq.forEach(function (f, i) {
+        var o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = f; o.connect(g); g.connect(ac.destination);
+        var t0 = ac.currentTime + i * 0.18; g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.16); o.start(t0); o.stop(t0 + 0.17);
+      });
+    } catch (e) {}
+  }
+  function beep() {
+    tone([660, 880, 660, 880, 660, 880], 0.2);
+    try { if (navigator.vibrate) navigator.vibrate([200, 80, 200, 80, 200, 80, 400]); } catch (e) {}
+  }
+  // tiene lo schermo acceso mentre aspetti, cosi' il telefono non si blocca e l'avviso arriva
+  function keepAwake() {
+    try {
+      if (!navigator.wakeLock || wake || document.visibilityState !== 'visible') return;
+      navigator.wakeLock.request('screen').then(function (l) { wake = l; l.addEventListener('release', function () { wake = null; }); }, function () {});
+    } catch (e) {}
+  }
+  function notifyReady(o) {
+    var el = document.getElementById('toast');
+    el.innerHTML = '<div><b>' + tr('Il tuo drink è pronto', 'Your drink is ready') + '</b><span>' + tr('Ordine #', 'Order #') + o.number + ' · ' + (o.mode === 'tavolo' ? tr('sta arrivando al tavolo ', 'on its way to table ') + esc(o.table_label) : tr('ritiralo al bancone', 'pick it up at the bar')) + '</span></div><button data-act="closeToast">Ok</button>';
+    el.hidden = false; beep();
+    try { document.title = '✅ ' + tr('Drink pronto #', 'Drink ready #') + o.number; } catch (e) {}
+    setTimeout(function () { el.hidden = true; document.title = baseTitle; }, 12000);
+  }
+
+  /* ---------- Stato dell'ordine ---------- */
+  function poll() {
+    if (!S.order) return;
+    api('/rest/v1/rpc/get_order', { method: 'POST', body: JSON.stringify({ p_id: S.order.id, p_token: S.order.t }) }).then(function (rows) {
+      var o = rows && rows[0];
+      if (!o) { stopPolling(); S.order = null; S.data = null; store('bancone_order', null); S.screen = 'menu'; render(); return; }
+      var prev = S.data;
+      var oldPending = o.status === 'pending_payment' && Date.now() - new Date(o.created_at).getTime() > 35 * 60000;
+      // un vecchio ordine di una serata passata non deve comparire quando si scansiona di nuovo il QR
+      if (!prev && !S.fromReturn && (o.status === 'done' || o.status === 'canceled' || oldPending)) {
+        stopPolling(); S.order = null; S.data = null; lastSeen = ''; store('bancone_order', null); S.screen = count() ? 'checkout' : 'menu'; render(); return;
+      }
+      if (prev && prev.status !== 'ready' && o.status === 'ready') notifyReady(o);
+      var sig = JSON.stringify(o);
+      S.data = o; if (sig !== lastSeen) { lastSeen = sig; render(); }
+      if (o.status === 'done' || o.status === 'canceled') stopPolling();
+    }).catch(function () { /* niente rete: riprovo al prossimo giro */ });
+  }
+  function startPolling() { stopPolling(); poll(); keepAwake(); timer = setInterval(poll, 4000); }
+  function stopPolling() { if (timer) { clearInterval(timer); timer = null; } }
+
+  /* ---------- Pagamento ---------- */
+  function pay() {
+    if (S.busy) return;
+    var tbl = S.mode === 'tavolo' ? (S.table || '').trim() : 'Bancone';
+    if (S.mode === 'tavolo' && !tbl) { S.err = tr('Scrivi il numero del tuo tavolo.', 'Please enter your table number.'); render(); return; }
+    if (!lines().length) return;
+    if (!S.age) { S.err = tr('Conferma di avere almeno 18 anni per continuare.', 'Please confirm you are at least 18 to continue.'); render(); return; }
+    S.busy = true; S.err = ''; render();
+    try { sessionStorage.setItem('bancone_cart', JSON.stringify(S.cart)); } catch (e) {}
+    fetch(cfg.supabaseUrl + '/functions/v1/create-checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: cfg.anonKey, Authorization: 'Bearer ' + cfg.anonKey },
+      body: JSON.stringify({ club: S.club, table: tbl, mode: S.mode, age_ok: true, note: S.note.trim(), items: lines().map(function (l) { return { id: l.id, q: l.q }; }) })
+    }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); }).then(function (res) {
+      if (!res.ok || !res.j.url) throw new Error((res.j && res.j.error) || tr('Pagamento non disponibile.', 'Payment unavailable.'));
+      store('bancone_order', { id: res.j.order_id, t: res.j.token, club: S.club });
+      location.href = res.j.url;
+    }).catch(function (e) {
+      S.busy = false; S.err = e.message || tr('Pagamento non disponibile. Riprova.', 'Payment unavailable. Please try again.'); render();
+    });
+  }
+
+  /* ---------- Eventi ---------- */
+  document.addEventListener('click', function (e) {
+    var el = e.target.closest('[data-act]'); if (!el) return;
+    var a = el.dataset.act, v = el.dataset.v, id = el.dataset.id;
+    S.err = '';
+    unlockAudio();
+    if (a === 'age') { S.age = !!el.checked; render(); return; }
+    if (a === 'lang') { S.lang = S.lang === 'en' ? 'it' : 'en'; store('bancone_lang', S.lang); document.documentElement.lang = S.lang; render(); return; }
+    if (a === 'sound') { tone([660, 880], 0.12); }
+    else if (a === 'cat') S.cat = v;
+    else if (a === 'inc') S.cart[id] = (S.cart[id] || 0) + 1;
+    else if (a === 'dec') S.cart[id] = Math.max(0, (S.cart[id] || 0) - 1);
+    else if (a === 'checkout') S.screen = 'checkout';
+    else if (a === 'back') S.screen = 'menu';
+    else if (a === 'mode') S.mode = v;
+    else if (a === 'pay') { pay(); return; }
+    else if (a === 'closeToast') { document.getElementById('toast').hidden = true; document.title = baseTitle; return; }
+    else if (a === 'newOrder') { stopPolling(); S.order = null; S.data = null; lastSeen = ''; store('bancone_order', null); S.cart = {}; S.screen = 'menu'; }
+    render();
+  });
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible' && S.order) { poll(); keepAwake(); }
+  });
+  document.addEventListener('input', function (e) {
+    if (e.target.id === 'table') S.table = e.target.value.trim().slice(0, 20);
+    else if (e.target.id === 'note') S.note = e.target.value.slice(0, 140);
+  });
+
+  /* ---------- Avvio ---------- */
+  function start() {
+    var id = qs.get('order'), t = qs.get('t');
+    if (id && t) {
+      S.order = { id: id, t: t }; S.fromReturn = true; store('bancone_order', { id: id, t: t, club: S.club });
+      try { history.replaceState(null, '', location.pathname + '?club=' + encodeURIComponent(S.club) + (S.table ? '&table=' + encodeURIComponent(S.table) : '')); } catch (e) {}
+    } else {
+      var saved = load('bancone_order'); if (saved && saved.club === S.club) S.order = { id: saved.id, t: saved.t };
+    }
+    if (qs.get('canceled')) {
+      S.err = tr('Pagamento annullato: non ti è stato addebitato nulla.', 'Payment canceled: you have not been charged.');
+      try { S.cart = JSON.parse(sessionStorage.getItem('bancone_cart')) || {}; } catch (e) {}
+    }
+    Promise.all([
+      api('/rest/v1/clubs?id=eq.' + encodeURIComponent(S.club) + '&select=id,name,service_fee_cents'),
+      api('/rest/v1/menu_items?club_id=eq.' + encodeURIComponent(S.club) + '&available=eq.true&select=*&order=sort.asc')
+    ]).then(function (r) {
+      if (!r[0][0]) { S.screen = 'error'; S.errMsg = tr('Locale non trovato. Controlla il QR code.', 'Venue not found. Please check the QR code.'); render(); return; }
+      S.info = r[0][0]; S.menu = r[1];
+      S.mode = S.table ? 'tavolo' : 'bancone';
+      // togli dal carrello i drink che non ci sono piu'
+      Object.keys(S.cart).forEach(function (k) { if (!S.menu.some(function (m) { return m.id === k; })) delete S.cart[k]; });
+      S.screen = S.order ? 'status' : (count() ? 'checkout' : 'menu');
+      render();
+      if (S.order) startPolling();
+    }).catch(function () { S.screen = 'error'; S.errMsg = tr('Non riesco a collegarmi. Controlla la connessione e riprova.', 'Cannot connect. Check your connection and try again.'); render(); });
+  }
+  document.documentElement.lang = S.lang;
+  start();
+})();
+</script>
+</body>
+</html>

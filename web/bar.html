@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Drinko · Bar</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap">
+<link rel="stylesheet" href="style.css">
+<script src="config.js"></script>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+
+<script>
+/* Schermata del barista: bar.html. Si entra con email e password create in Supabase. */
+(function () {
+  var cfg = window.APP, KEY = 'bancone_staff';
+  var S = { session: null, club: null, menu: [], menuOpen: false, confirmId: null, refunding: false, sumOpen: false, refunded: { n: 0, sum: 0 }, orders: [], done: { n: 0, sum: 0, fee: 0 }, err: '', booting: true, seen: null };
+  var timer = null, ac = null, wake = null, lastAlert = 0, baseTitle = document.title;
+
+  function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function eur(c) { return (c / 100).toLocaleString('it-IT', { style: 'currency', currency: 'EUR' }); }
+  function mins(t) { var m = Math.max(0, Math.floor((Date.now() - new Date(t).getTime()) / 60000)); return m === 0 ? 'ora' : m + ' min'; }
+  function loadSession() { try { return JSON.parse(localStorage.getItem(KEY)); } catch (e) { return null; } }
+  function saveSession(s) { try { if (s) localStorage.setItem(KEY, JSON.stringify(s)); else localStorage.removeItem(KEY); } catch (e) {} }
+
+  /* ---------- Accesso ---------- */
+  function authCall(grant, body) {
+    return fetch(cfg.supabaseUrl + '/auth/v1/token?grant_type=' + grant, {
+      method: 'POST', headers: { apikey: cfg.anonKey, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    }).then(function (r) {
+      return r.json().then(function (j) {
+        if (!r.ok || !j.access_token) throw new Error(grant === 'password' ? 'Email o password errate.' : 'Sessione scaduta.');
+        return { access_token: j.access_token, refresh_token: j.refresh_token, expires_at: Date.now() + (j.expires_in || 3600) * 1000 - 60000 };
+      });
+    });
+  }
+  function token() {
+    if (S.session.expires_at > Date.now()) return Promise.resolve(S.session.access_token);
+    return authCall('refresh_token', { refresh_token: S.session.refresh_token }).then(function (s) { S.session = s; saveSession(s); return s.access_token; });
+  }
+  function rest(path, init) {
+    return token().then(function (t) {
+      init = init || {};
+      init.headers = Object.assign({ apikey: cfg.anonKey, Authorization: 'Bearer ' + t, 'Content-Type': 'application/json' }, init.headers || {});
+      return fetch(cfg.supabaseUrl + '/rest/v1/' + path, init);
+    });
+  }
+  function getJson(path) { return rest(path).then(function (r) { if (!r.ok) throw new Error('http ' + r.status); return r.json(); }); }
+
+  /* ---------- Dati ---------- */
+  function findClub() {
+    return getJson('staff?select=club_id').then(function (rows) {
+      if (!rows.length) throw new Error('Questo account non è collegato a nessun locale.');
+      return getJson('clubs?id=eq.' + encodeURIComponent(rows[0].club_id) + '&select=id,name');
+    }).then(function (c) { if (!c[0]) throw new Error('Locale non trovato.'); S.club = c[0]; });
+  }
+  function refreshOrders() {
+    if (!S.club) return Promise.resolve();
+    var since = encodeURIComponent(new Date(Date.now() - 12 * 3600 * 1000).toISOString());
+    var cid = encodeURIComponent(S.club.id);
+    return Promise.all([
+      getJson('orders?club_id=eq.' + cid + '&status=in.(new,prep,ready)&order=created_at.asc&select=id,number,table_label,mode,items,note,subtotal_cents,fee_cents,status,created_at'),
+      getJson('orders?club_id=eq.' + cid + '&status=eq.done&created_at=gte.' + since + '&select=subtotal_cents,fee_cents'),
+      getJson('menu_items?club_id=eq.' + cid + '&select=id,name,category,available&order=sort.asc'),
+      getJson('orders?club_id=eq.' + cid + '&status=eq.canceled&paid_at=not.is.null&created_at=gte.' + since + '&select=subtotal_cents,fee_cents')
+    ]).then(function (r) {
+      S.menu = r[2];
+      S.refunded = { n: r[3].length, sum: r[3].reduce(function (s, o) { return s + o.subtotal_cents + o.fee_cents; }, 0) };
+      var ids = r[0].filter(function (o) { return o.status === 'new'; }).map(function (o) { return o.id; });
+      if (S.seen !== null && ids.some(function (id) { return S.seen.indexOf(id) < 0; })) { newOrderAlert(); lastAlert = Date.now(); }
+      // se un ordine nuovo resta fermo, il suono si ripete ogni 25 secondi finche' qualcuno lo prende in carico
+      else if (r[0].some(function (o) { return o.status === 'new' && Date.now() - new Date(o.created_at).getTime() > 25000; }) && Date.now() - lastAlert > 25000) { newOrderAlert(); lastAlert = Date.now(); }
+      S.seen = ids;
+      S.orders = r[0];
+      try { var nn = r[0].filter(function (o) { return o.status === 'new'; }).length; baseTitle = (nn ? '(' + nn + ') ' : '') + 'Drinko · Bar'; document.title = baseTitle; } catch (e) {}
+      S.done = { n: r[1].length, sum: r[1].reduce(function (s, o) { return s + o.subtotal_cents; }, 0), fee: r[1].reduce(function (s, o) { return s + o.fee_cents; }, 0) };
+      S.err = ''; render();
+    }).catch(function (e) {
+      if (/Sessione scaduta/.test(e.message)) return logout();
+      S.err = 'Connessione assente: riprovo…'; render();
+    });
+  }
+  function advance(id) {
+    var o = S.orders.filter(function (x) { return x.id === id; })[0]; if (!o) return;
+    var next = { 'new': 'prep', prep: 'ready', ready: 'done' }[o.status];
+    rest('orders?id=eq.' + encodeURIComponent(id), { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ status: next }) })
+      .then(function (r) { if (!r.ok) throw new Error('no'); return refreshOrders(); })
+      .catch(function () { S.err = 'Non sono riuscito ad aggiornare l’ordine. Riprova.'; render(); });
+  }
+
+  function cancelOrder(id) {
+    if (S.refunding) return;
+    S.refunding = true; S.err = ''; render();
+    token().then(function (t) {
+      return fetch(cfg.supabaseUrl + '/functions/v1/refund-order', {
+        method: 'POST', headers: { apikey: cfg.anonKey, Authorization: 'Bearer ' + t, 'Content-Type': 'application/json' }, body: JSON.stringify({ order_id: id })
+      });
+    }).then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error(j.error || 'Rimborso non riuscito.'); }); })
+      .then(function () { S.confirmId = null; return refreshOrders(); })
+      .catch(function (e) { S.err = e.message || 'Rimborso non riuscito.'; })
+      .then(function () { S.refunding = false; render(); });
+  }
+  function toggleItem(id) {
+    var m = S.menu.filter(function (x) { return x.id === id; })[0]; if (!m) return;
+    var now = !m.available;
+    m.available = now; render();
+    rest('menu_items?id=eq.' + encodeURIComponent(id), { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ available: now }) })
+      .then(function (r) { if (!r.ok) throw new Error('no'); })
+      .catch(function () { m.available = !now; S.err = 'Non sono riuscito a cambiare la disponibilità. Riprova.'; render(); });
+  }
+  function soundOn() { return !!ac && ac.state === 'running'; }
+  function keepAwake() {
+    try {
+      if (!navigator.wakeLock || wake || document.visibilityState !== 'visible') return;
+      navigator.wakeLock.request('screen').then(function (l) { wake = l; l.addEventListener('release', function () { wake = null; }); }, function () {});
+    } catch (e) {}
+  }
+
+  /* ---------- Suono per i nuovi ordini ---------- */
+  function newOrderAlert() {
+    try {
+      var Ctx = window.AudioContext || window.webkitAudioContext; ac = ac || new Ctx();
+      [880, 1175].forEach(function (f, i) {
+        var o = ac.createOscillator(), g = ac.createGain(); o.frequency.value = f; o.connect(g); g.connect(ac.destination);
+        var t0 = ac.currentTime + i * 0.2; g.gain.setValueAtTime(0.2, t0); g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.18); o.start(t0); o.stop(t0 + 0.2);
+      });
+    } catch (e) {}
+    try { document.title = '• Nuovo ordine'; setTimeout(function () { document.title = baseTitle; }, 4000); } catch (e) {}
+  }
+
+  /* ---------- Schermate ---------- */
+  function card(o) {
+    var ls = o.items.map(function (i) { return '<li><span class="q">' + i.q + ' ×</span> ' + esc(i.name) + '</li>'; }).join('');
+    var label = { 'new': 'Prendi in carico', prep: 'Segna pronto', ready: 'Consegnato' }[o.status];
+    var cancel = S.confirmId === o.id
+      ? '<div class="confirm"><span>Rimborsare l’ordine #' + o.number + '?</span><button class="danger" data-act="cancel-yes" data-id="' + esc(o.id) + '"' + (S.refunding ? ' disabled' : '') + '>' + (S.refunding ? 'Un attimo…' : 'Sì, rimborsa') + '</button><button class="ghost" data-act="cancel-no">No</button></div>'
+      : '<button class="linkbtn" data-act="cancel-ask" data-id="' + esc(o.id) + '">Annulla e rimborsa</button>';
+    var late = (o.status === 'new' || o.status === 'prep') && Date.now() - new Date(o.created_at).getTime() >= 5 * 60000;
+    var noteLine = o.note ? '<p class="note-line">📝 ' + esc(o.note) + '</p>' : '';
+    return '<article class="order s-' + o.status + (late ? ' late' : '') + '"><div class="head"><strong>#' + o.number + '</strong><span class="where">' + (o.mode === 'tavolo' ? 'Tavolo ' + esc(o.table_label) + ' · al tavolo' : 'Bancone') + '</span><span class="age">' + mins(o.created_at) + '</span></div>'
+      + '<ul class="lines">' + ls + '</ul>' + noteLine + '<div class="bot"><b>' + eur(o.subtotal_cents) + '</b><button class="adv" data-act="adv" data-id="' + esc(o.id) + '">' + label + '</button></div>' + cancel + '</article>';
+  }
+  function viewLogin() {
+    return '<form class="login" id="login"><h1>Drinko · Bar</h1><p class="small">Accedi con l’email e la password del locale.</p>'
+      + (S.err ? '<div class="err">' + esc(S.err) + '</div>' : '')
+      + '<input class="input" id="email" type="email" autocomplete="username" placeholder="Email" required>'
+      + '<input class="input" id="pw" type="password" autocomplete="current-password" placeholder="Password" required>'
+      + '<button class="pay" type="submit">Entra</button></form>';
+  }
+  // Stima delle commissioni carta di Stripe (carte europee standard): 1,5% + 0,25 EUR a pagamento.
+  // E' solo una stima: le tariffe vere sono nel conto Stripe del locale.
+  var STRIPE_PCT = 0.015, STRIPE_FIX = 25;
+  function viewSummary() {
+    var head = '<button class="ghost" data-act="sum">' + (S.sumOpen ? 'Chiudi riepilogo' : 'Riepilogo serata') + '</button>';
+    if (!S.sumOpen) return '<div class="menu-admin">' + head + '</div>';
+    var n = S.done.n + S.orders.length;
+    var drinks = S.done.sum + S.orders.reduce(function (s, o) { return s + o.subtotal_cents; }, 0);
+    var fees = S.done.fee + S.orders.reduce(function (s, o) { return s + o.fee_cents; }, 0);
+    var card = Math.round((drinks + fees) * STRIPE_PCT + n * STRIPE_FIX);
+    var rows = [
+      ['Ordini pagati', String(n)],
+      ['Incasso drink', eur(drinks)],
+      ['Costo del servizio (pagato dai clienti)', eur(fees)],
+      ['Commissioni carta (stima)', '− ' + eur(card)],
+      ['Netto stimato per il locale', eur(drinks - card)],
+      ['Ordini rimborsati', S.refunded.n + (S.refunded.n ? ' · ' + eur(S.refunded.sum) : '')]
+    ].map(function (r, i) { return '<li' + (i === 4 ? ' class="strong"' : '') + '><span>' + r[0] + '</span><b>' + r[1] + '</b></li>'; }).join('');
+    return '<div class="menu-admin">' + head + '<p class="small">Ultime 12 ore. Gli ordini rimborsati non sono nei totali.</p><ul class="summary">' + rows + '</ul></div>';
+  }
+  function viewMenuPanel() {
+    var open = S.menuOpen;
+    var out = S.menu.filter(function (m) { return !m.available; }).length;
+    var head = '<button class="ghost" data-act="menu">' + (open ? 'Chiudi' : 'Disponibilità drink') + (out ? ' · ' + out + (out === 1 ? ' esaurito' : ' esauriti') : '') + '</button>';
+    if (!open) return '<div class="menu-admin">' + head + '</div>';
+    var items = S.menu.map(function (m) {
+      return '<li class="' + (m.available ? '' : 'off') + '"><span>' + esc(m.name) + ' <small>' + esc(m.category) + '</small></span><button data-act="toggle" data-id="' + esc(m.id) + '" aria-pressed="' + m.available + '">' + (m.available ? 'Disponibile' : 'Esaurito') + '</button></li>';
+    }).join('');
+    return '<div class="menu-admin">' + head + '<p class="small">Un drink segnato "Esaurito" sparisce subito dal menu dei clienti.</p><ul>' + items + '</ul></div>';
+  }
+  function viewBoard() {
+    var cols = [['new', 'Nuovi'], ['prep', 'In preparazione'], ['ready', 'Pronti']].map(function (c) {
+      var list = S.orders.filter(function (o) { return o.status === c[0]; });
+      var body = list.length ? list.map(card).join('') : '<p class="empty">' + (c[0] === 'new' ? 'Nessun ordine. Quando un cliente paga, compare qui.' : 'Nessun ordine.') + '</p>';
+      return '<div class="col"><h2>' + c[1] + ' <span class="count">' + list.length + '</span></h2>' + body + '</div>';
+    }).join('');
+    var open = S.orders.length;
+    var cash = S.done.sum + S.orders.reduce(function (s, o) { return s + o.subtotal_cents; }, 0);
+    return '<div class="top"><h1>' + esc(S.club.name) + ' · bar</h1><button class="ghost" data-act="logout">Esci</button></div>'
+      + (S.err ? '<div class="err">' + esc(S.err) + '</div>' : '')
+      + (soundOn() ? '' : '<button class="ghost sound" data-act="sound">🔔 Tocca per attivare il suono dei nuovi ordini</button>')
+      + viewMenuPanel() + viewSummary()
+      + '<div class="stats"><div class="stat"><b>' + open + '</b><span class="small">Ordini aperti</span></div>'
+      + '<div class="stat"><b>' + S.done.n + '</b><span class="small">Consegnati (12 ore)</span></div>'
+      + '<div class="stat"><b>' + eur(cash) + '</b><span class="small">Incassato drink (12 ore)</span></div></div>'
+      + '<div class="board">' + cols + '</div>';
+  }
+  function render() {
+    var app = document.getElementById('app');
+    if (S.booting) { app.innerHTML = '<p class="note">Caricamento…</p>'; return; }
+    // non ridisegnare il modulo di accesso mentre si scrive
+    if (!S.session) { if (!document.getElementById('login')) app.innerHTML = viewLogin(); return; }
+    app.innerHTML = S.club ? viewBoard() : '<p class="note">' + (S.err || 'Caricamento…') + '</p>';
+  }
+
+  /* ---------- Avvio ed eventi ---------- */
+  function begin() {
+    S.err = ''; S.seen = null;
+    findClub().then(function () { return refreshOrders(); }).then(function () {
+      clearInterval(timer); timer = setInterval(refreshOrders, 3000); keepAwake();
+    }).catch(function (e) { S.err = e.message; S.club = null; render(); });
+  }
+  function logout() { clearInterval(timer); S.session = null; S.club = null; S.orders = []; saveSession(null); S.err = ''; document.getElementById('app').innerHTML = ''; render(); }
+
+  document.addEventListener('submit', function (e) {
+    if (e.target.id !== 'login') return;
+    e.preventDefault();
+    S.err = '';
+    authCall('password', { email: document.getElementById('email').value.trim(), password: document.getElementById('pw').value }).then(function (s) {
+      S.session = s; saveSession(s); document.getElementById('app').innerHTML = ''; render(); begin();
+    }).catch(function (er) { S.err = er.message; document.getElementById('app').innerHTML = viewLogin(); });
+  });
+  document.addEventListener('click', function (e) {
+    var el = e.target.closest('[data-act]'); if (!el) return;
+    try { var Ctx = window.AudioContext || window.webkitAudioContext; ac = ac || new Ctx(); if (ac.state === 'suspended') ac.resume(); } catch (er) {}
+    if (el.dataset.act === 'adv') advance(el.dataset.id);
+    else if (el.dataset.act === 'logout') logout();
+    else if (el.dataset.act === 'cancel-ask') { S.confirmId = el.dataset.id; render(); }
+    else if (el.dataset.act === 'cancel-no') { S.confirmId = null; render(); }
+    else if (el.dataset.act === 'cancel-yes') cancelOrder(el.dataset.id);
+    else if (el.dataset.act === 'sum') { S.sumOpen = !S.sumOpen; render(); }
+    else if (el.dataset.act === 'menu') { S.menuOpen = !S.menuOpen; render(); }
+    else if (el.dataset.act === 'toggle') toggleItem(el.dataset.id);
+    else if (el.dataset.act === 'sound') { newOrderAlert(); render(); }
+  });
+
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible' && S.session) { keepAwake(); refreshOrders(); } });
+  S.booting = false; S.session = loadSession(); render();
+  if (S.session) begin();
+})();
+</script>
+</body>
+</html>

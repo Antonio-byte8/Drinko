@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Drinko · Collega un locale</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap">
+<link rel="stylesheet" href="style.css">
+<script src="config.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <form class="login" id="f">
+    <h1>Collega un locale a Stripe</h1>
+    <p class="small">Scrivi il nome corto del locale (lo stesso del database, per esempio aurora) e la tua chiave admin. Ti do un link da mandare al gestore: lui inserisce documenti e IBAN su Stripe e da quel momento incassa i pagamenti.</p>
+    <div class="err" id="err" hidden></div>
+    <input class="input" id="club" placeholder="Nome corto del locale" autocomplete="off" required>
+    <input class="input" id="key" type="password" placeholder="Chiave admin" autocomplete="off" required>
+    <button class="pay" id="go" type="submit">Crea il link</button>
+    <div id="out" hidden>
+      <p class="field-title">Manda questo link al gestore</p>
+      <div class="linkbox" id="url"></div>
+      <p class="small" id="acct" style="margin-top:8px"></p>
+      <button class="ghost" id="copy" type="button" style="margin-top:10px">Copia il link</button>
+    </div>
+  </form>
+
+  <form class="login" id="mf" style="margin-top:28px">
+    <h1>Crea un locale e il suo menu</h1>
+    <p class="small">Una riga per ogni drink: <b>Categoria | Nome | Descrizione | Prezzo</b>, e se vuoi una quinta colonna con l’indirizzo https di una foto. Il prezzo si scrive come 10 oppure 10,50. Le righe che iniziano con # sono ignorate. Se rilanci con un elenco diverso, i drink che non ci sono più spariscono.</p>
+    <div class="err" id="merr" hidden></div>
+    <div class="ok" id="mok" hidden></div>
+    <input class="input" id="mclub" placeholder="Nome corto (es. aurora)" autocomplete="off" required>
+    <input class="input" id="mname" placeholder="Nome da mostrare (es. Club Aurora)" autocomplete="off">
+    <input class="input" id="mfee" inputmode="numeric" placeholder="Costo del servizio in centesimi (vuoto = non cambiare, 49 = 0,49 €)" autocomplete="off">
+    <textarea class="input" id="mtext" rows="10" placeholder="Cocktail | Gin Tonic | Gin, tonica, limone | 10&#10;Shot | Shot tequila | Con sale e limone | 4&#10;Birre | Birra alla spina | Media 0,4 l | 6" style="font-family:ui-monospace,Menlo,monospace;font-size:13px"></textarea>
+    <input class="input" id="mkey" type="password" placeholder="Chiave admin" autocomplete="off" required>
+    <button class="pay" id="mgo" type="submit">Salva locale e menu</button>
+  </form>
+</div>
+<script>
+(function () {
+  var cfg = window.APP, $ = function (id) { return document.getElementById(id); };
+  var qs = new URLSearchParams(location.search);
+  if (qs.get('done')) { $('err').hidden = false; $('err').textContent = 'Collegamento completato (o interrotto): ripremi "Crea il link" per vedere lo stato.'; }
+  $('f').addEventListener('submit', function (e) {
+    e.preventDefault();
+    $('go').disabled = true; $('err').hidden = true; $('out').hidden = true;
+    fetch(cfg.supabaseUrl + '/functions/v1/connect-link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: cfg.anonKey, Authorization: 'Bearer ' + cfg.anonKey, 'x-admin-key': $('key').value },
+      body: JSON.stringify({ club: $('club').value.trim().toLowerCase() })
+    }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); }).then(function (res) {
+      if (!res.ok) throw new Error(res.j.error || 'Errore');
+      $('url').textContent = res.j.url; $('acct').textContent = 'Account Stripe del locale: ' + res.j.account; $('out').hidden = false;
+    }).catch(function (er) { $('err').hidden = false; $('err').textContent = er.message; })
+      .then(function () { $('go').disabled = false; });
+  });
+  $('key').addEventListener('input', function () { if (!$('mkey').value) $('mkey').value = $('key').value; });
+  $('mf').addEventListener('submit', function (e) {
+    e.preventDefault();
+    $('mgo').disabled = true; $('merr').hidden = true; $('mok').hidden = true;
+    var body = { club: $('mclub').value.trim().toLowerCase(), name: $('mname').value.trim(), menu_text: $('mtext').value };
+    if ($('mfee').value.trim() !== '') body.fee_cents = Number($('mfee').value);
+    fetch(cfg.supabaseUrl + '/functions/v1/admin-menu', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: cfg.anonKey, Authorization: 'Bearer ' + cfg.anonKey, 'x-admin-key': $('mkey').value },
+      body: JSON.stringify(body)
+    }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); }).then(function (res) {
+      if (!res.ok) throw new Error(res.j.error || 'Errore');
+      $('mok').hidden = false;
+      $('mok').textContent = (res.j.created ? 'Locale creato. ' : 'Locale aggiornato. ') + (res.j.items ? res.j.items + ' drink salvati.' : 'Menu non modificato.') + ' Link per i clienti: ' + location.href.split('#')[0].split('?')[0].replace(/[^\/]*$/, '') + 'index.html?club=' + res.j.club;
+    }).catch(function (er) { $('merr').hidden = false; $('merr').style.whiteSpace = 'pre-line'; $('merr').textContent = er.message; })
+      .then(function () { $('mgo').disabled = false; });
+  });
+  $('copy').addEventListener('click', function () {
+    var t = $('url').textContent;
+    (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(function () { $('copy').textContent = 'Copiato'; }, function () {
+      var r = document.createRange(); r.selectNodeContents($('url')); var s = getSelection(); s.removeAllRanges(); s.addRange(r); $('copy').textContent = 'Seleziona e copia';
+    });
+  });
+})();
+</script>
+</body>
+</html>
