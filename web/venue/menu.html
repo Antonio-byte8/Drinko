@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Drinko · Menu</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap">
+<link rel="stylesheet" href="../style.css">
+<script src="../config.js"></script>
+<script src="portal.js"></script>
+</head>
+<body class="portal-body">
+<div id="root"></div>
+<div id="portal-toast" class="portal-toast"></div>
+<div id="modal" hidden></div>
+
+<script>
+(function () {
+  var S = { session: null, venue: null, items: [], cats: [], busy: false };
+  var GLASS_OPTIONS = ['hb','rk','mt','sh','pint','bt','bot','can'];
+
+  function esc(s) { return PORTAL.esc(s); }
+  function eur(c) { return PORTAL.eur(c); }
+
+  /* ---------- Load data ---------- */
+  function load() {
+    if (!S.venue) return Promise.resolve();
+    var cid = encodeURIComponent(S.venue.club.id);
+    return PORTAL.api(S.session, 'menu_items?club_id=eq.' + cid + '&order=sort.asc&select=*').then(function (rows) {
+      S.items = rows || [];
+      S.cats = [];
+      S.items.forEach(function (m) { if (S.cats.indexOf(m.category) < 0) S.cats.push(m.category); });
+      render();
+    });
+  }
+
+  /* ---------- Render ---------- */
+  function renderPage() {
+    var byCategory = {};
+    S.items.forEach(function (m) {
+      if (!byCategory[m.category]) byCategory[m.category] = [];
+      byCategory[m.category].push(m);
+    });
+
+    var content = '<div class="page-header"><div><h1>Menu</h1><p>Manage your drinks catalogue.</p></div>'
+      + '<div class="page-actions"><button class="btn btn-secondary btn-sm" data-act="new-category">+ Category</button><button class="btn btn-primary" data-act="new-item">+ Add drink</button></div></div>';
+
+    if (!S.items.length) {
+      content += '<div class="empty-state"><h3>No drinks yet</h3><p>Add your first category and drink to get started.</p><button class="btn btn-primary" data-act="new-item">+ Add drink</button></div>';
+    } else {
+      content += Object.keys(byCategory).map(function (cat) {
+        var rows = byCategory[cat].map(function (m) {
+          var avail = m.available;
+          return '<tr>'
+            + '<td style="width:40px"><div class="thumb" style="width:38px;height:38px;border-radius:9px;background:' + esc(m.color || '#e9f6f2') + '"></div></td>'
+            + '<td><b>' + esc(m.name) + '</b>' + (m.description ? '<br><span class="small">' + esc(m.description) + '</span>' : '') + '</td>'
+            + '<td>' + eur(m.price_cents) + '</td>'
+            + '<td><span class="badge ' + (avail ? 'badge-green' : 'badge-muted') + '">' + (avail ? 'Available' : 'Unavailable') + '</span></td>'
+            + '<td style="text-align:right;white-space:nowrap">'
+            + '<button class="btn btn-secondary btn-sm" data-act="toggle" data-id="' + esc(m.id) + '" data-avail="' + avail + '">' + (avail ? 'Mark out' : 'Mark in') + '</button> '
+            + '<button class="btn btn-secondary btn-sm btn-icon" data-act="edit" data-id="' + esc(m.id) + '" title="Edit">✏</button> '
+            + '<button class="btn btn-danger btn-sm btn-icon" data-act="delete" data-id="' + esc(m.id) + '" title="Delete">✕</button>'
+            + '</td></tr>';
+        }).join('');
+        return '<div class="card" style="margin-bottom:16px">'
+          + '<div class="card-header"><h2>' + esc(cat) + '</h2><span class="small">' + byCategory[cat].length + ' item' + (byCategory[cat].length !== 1 ? 's' : '') + '</span></div>'
+          + '<table class="data-table" style="width:100%"><thead><tr><th></th><th>Drink</th><th>Price</th><th>Status</th><th></th></tr></thead><tbody>' + rows + '</tbody></table>'
+          + '</div>';
+      }).join('');
+    }
+    return content;
+  }
+
+  function render() {
+    var root = document.getElementById('root');
+    root.innerHTML = '<div class="portal">' + PORTAL.renderNav('menu.html', S.venue && S.venue.club.name, S.venue && S.venue.role) + '<div class="portal-main"><div class="portal-content">' + renderPage() + '</div></div></div>';
+    var logoutBtn = document.getElementById('nav-logout');
+    if (logoutBtn) logoutBtn.addEventListener('click', function () { PORTAL.signOut(); });
+  }
+
+  /* ---------- Modals ---------- */
+  function showItemModal(item) {
+    var isEdit = !!item;
+    var modalEl = document.getElementById('modal');
+    modalEl.hidden = false;
+    modalEl.innerHTML = '<div class="modal-overlay" id="modal-overlay">'
+      + '<div class="modal-box">'
+      + '<h2>' + (isEdit ? 'Edit drink' : 'New drink') + '</h2>'
+      + (S.busy ? '<p class="note">Saving…</p>' : '')
+      + '<div class="form-group"><label>Category</label>'
+      + '<input class="input" id="m-cat" list="cat-list" placeholder="e.g. Cocktails" value="' + esc((item && item.category) || '') + '" required maxlength="30">'
+      + '<datalist id="cat-list">' + S.cats.map(function (c) { return '<option value="' + esc(c) + '">'; }).join('') + '</datalist></div>'
+      + '<div class="form-row">'
+      + '<div class="form-group"><label>Name</label><input class="input" id="m-name" placeholder="Gin & Tonic" value="' + esc((item && item.name) || '') + '" required maxlength="60"></div>'
+      + '<div class="form-group"><label>Price (€)</label><input class="input" id="m-price" type="number" min="0.50" max="500" step="0.50" placeholder="10.00" value="' + ((item && item.price_cents) ? (item.price_cents / 100).toFixed(2) : '') + '" required></div>'
+      + '</div>'
+      + '<div class="form-group"><label>Description <span style="font-weight:400;color:var(--muted)">(optional)</span></label><input class="input" id="m-desc" placeholder="Hendricks, Fever-Tree, cucumber" value="' + esc((item && item.description) || '') + '" maxlength="120"></div>'
+      + '<div class="form-group"><label>Photo URL <span style="font-weight:400;color:var(--muted)">(optional, https://…)</span></label><input class="input" id="m-img" type="url" placeholder="https://…" value="' + esc((item && item.image_url) || '') + '"></div>'
+      + '<div class="form-row">'
+      + '<div class="form-group"><label>Glass style</label><select class="input" id="m-glass">'
+      + GLASS_OPTIONS.map(function (g) { return '<option value="' + g + '"' + ((item && item.glass) === g ? ' selected' : '') + '>' + g + '</option>'; }).join('')
+      + '</select></div>'
+      + '<div class="form-group"><label>Accent color</label><input class="input" id="m-color" type="color" value="' + esc((item && item.color) || '#e9f6f2') + '" style="height:44px;padding:4px 8px"></div>'
+      + '</div>'
+      + '<div class="modal-footer">'
+      + '<button class="btn btn-secondary" data-act="close-modal">Cancel</button>'
+      + '<button class="btn btn-primary" data-act="save-item" data-id="' + esc((item && item.id) || '') + '">' + (isEdit ? 'Save changes' : 'Add drink') + '</button>'
+      + '</div></div></div>';
+  }
+
+  function closeModal() {
+    var m = document.getElementById('modal');
+    m.hidden = true;
+    m.innerHTML = '';
+  }
+
+  /* ---------- CRUD ---------- */
+  function saveItem(id) {
+    var cat = document.getElementById('m-cat').value.trim();
+    var name = document.getElementById('m-name').value.trim();
+    var priceRaw = parseFloat(document.getElementById('m-price').value);
+    var desc = document.getElementById('m-desc').value.trim();
+    var img = document.getElementById('m-img').value.trim();
+    var glass = document.getElementById('m-glass').value;
+    var color = document.getElementById('m-color').value;
+
+    if (!cat || !name || isNaN(priceRaw) || priceRaw < 0.5) { PORTAL.toast('Please fill in all required fields.', 'error'); return; }
+    if (img && !/^https:\/\//.test(img)) { PORTAL.toast('Photo URL must start with https://', 'error'); return; }
+
+    var price_cents = Math.round(priceRaw * 100);
+    var cid = S.venue.club.id;
+    var row = { club_id: cid, category: cat, name: name, description: desc, price_cents: price_cents, image_url: img || null, glass: glass, color: color, available: true };
+
+    S.busy = true;
+    if (id) {
+      PORTAL.api(S.session, 'menu_items?id=eq.' + encodeURIComponent(id), {
+        method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(row)
+      }).then(function () {
+        S.busy = false; closeModal(); PORTAL.toast('Drink updated.'); load();
+      }).catch(function (er) { S.busy = false; PORTAL.toast(er.message, 'error'); });
+    } else {
+      var newId = cid + '-' + Date.now();
+      var maxSort = S.items.reduce(function (m, x) { return Math.max(m, x.sort || 0); }, 0);
+      row.id = newId; row.sort = maxSort + 10;
+      PORTAL.api(S.session, 'menu_items', {
+        method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(row)
+      }).then(function () {
+        S.busy = false; closeModal(); PORTAL.toast('Drink added.'); load();
+      }).catch(function (er) { S.busy = false; PORTAL.toast(er.message, 'error'); });
+    }
+  }
+
+  function toggleItem(id, avail) {
+    PORTAL.api(S.session, 'menu_items?id=eq.' + encodeURIComponent(id), {
+      method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ available: !avail })
+    }).then(function () {
+      PORTAL.toast(avail ? 'Marked as unavailable.' : 'Marked as available.'); load();
+    }).catch(function (er) { PORTAL.toast(er.message, 'error'); });
+  }
+
+  function deleteItem(id) {
+    if (!confirm('Delete this drink? This cannot be undone.')) return;
+    PORTAL.api(S.session, 'menu_items?id=eq.' + encodeURIComponent(id), {
+      method: 'DELETE', headers: { Prefer: 'return=minimal' }
+    }).then(function () {
+      PORTAL.toast('Drink deleted.'); load();
+    }).catch(function (er) { PORTAL.toast(er.message, 'error'); });
+  }
+
+  /* ---------- Events ---------- */
+  document.addEventListener('click', function (e) {
+    var el = e.target.closest('[data-act]');
+    if (!el) return;
+    var act = el.dataset.act, id = el.dataset.id;
+    if (act === 'new-item') { showItemModal(null); }
+    else if (act === 'edit') { var item = S.items.filter(function (x) { return x.id === id; })[0]; if (item) showItemModal(item); }
+    else if (act === 'toggle') { toggleItem(id, el.dataset.avail === 'true'); }
+    else if (act === 'delete') { deleteItem(id); }
+    else if (act === 'save-item') { saveItem(id); }
+    else if (act === 'close-modal') { closeModal(); }
+    else if (act === 'new-category') {
+      var cat = prompt('Category name:');
+      if (cat && cat.trim()) { PORTAL.toast('Add a drink under "' + cat.trim() + '" to create this category.'); }
+    }
+  });
+
+  document.addEventListener('click', function (e) {
+    if (e.target.id === 'modal-overlay') closeModal();
+  });
+
+  /* ---------- Boot ---------- */
+  S.session = PORTAL.loadSession();
+  if (!PORTAL.requireAuth(S.session)) return;
+  PORTAL.getVenue(S.session).then(function (v) {
+    S.venue = v;
+    if (!v) { location.href = 'index.html'; return; }
+    return load();
+  }).catch(function () { location.href = 'index.html'; });
+})();
+</script>
+</body>
+</html>

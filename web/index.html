@@ -24,8 +24,10 @@
   var S = {
     club: (qs.get('club') || cfg.defaultClub || '').toLowerCase(),
     table: (qs.get('table') || '').trim().slice(0, 20),
+    barId: (qs.get('bar') || '').trim(),   // pre-selected bar from QR code
     screen: 'loading', info: null, menu: [], cat: null, cart: {}, mode: null,
     busy: false, err: '', order: null, data: null, age: false, note: '', fromReturn: false,
+    bars: [], selectedBarId: (qs.get('bar') || '').trim(), waitMinutes: null,
     lang: ((qs.get('lang') || load('bancone_lang') || (/^it/i.test(navigator.language || 'it') ? 'it' : 'en')) === 'en') ? 'en' : 'it'
   };
   var timer = null, ac = null, wake = null, lastSeen = '', baseTitle = document.title;
@@ -48,7 +50,12 @@
   function count() { return lines().reduce(function (s, l) { return s + l.q; }, 0); }
   function subtotal() { return lines().reduce(function (s, l) { return s + l.q * l.p; }, 0); }
   function fee() { return S.info ? S.info.service_fee_cents : 0; }
-  function place() { return S.mode === 'tavolo' ? tr('Tavolo ', 'Table ') + (S.table || '?') : tr('Bancone', 'Bar'); }
+  function place() {
+    if (S.mode === 'tavolo') return tr('Tavolo ', 'Table ') + (S.table || '?');
+    var bar = S.bars.filter(function (b) { return b.id === S.selectedBarId; })[0];
+    return bar ? bar.name : tr('Bancone', 'Bar');
+  }
+  function barName(id) { var b = S.bars.filter(function (x) { return x.id === id; })[0]; return b ? b.name : id; }
 
   /* ---------- Schermate ---------- */
   function thumb(m) {
@@ -78,14 +85,30 @@
   function viewCheckout() {
     var ls = lines().map(function (l) { return '<li><span><span class="q">' + l.q + ' ×</span> ' + esc(l.n) + '</span><span>' + eur(l.q * l.p) + '</span></li>'; }).join('');
     var feeRow = fee() > 0 ? '<li><span>' + tr('Costo del servizio', 'Service fee') + '</span><span>' + eur(fee()) + '</span></li>' : '';
-    var modes = [['tavolo', tr('Al tavolo', 'To my table')], ['bancone', tr('Ritiro al bancone', 'Pick up at the bar')]].map(function (m) {
+    var hasBars = S.bars.length > 0;
+    var modes = [
+      ['tavolo', tr('Al tavolo', 'To my table')],
+      ['bancone', hasBars && S.bars.length === 1 ? tr('Ritiro: ', 'Pick up: ') + S.bars[0].name : tr('Ritiro al bancone', 'Pick up at bar')]
+    ].map(function (m) {
       return '<button data-act="mode" data-v="' + m[0] + '" aria-pressed="' + (S.mode === m[0]) + '">' + m[1] + '</button>';
     }).join('');
     var tableField = (S.mode === 'tavolo' && !qs.get('table'))
       ? '<div><p class="field-title">' + tr('Il tuo tavolo', 'Your table') + '</p><input class="input" id="table" inputmode="numeric" maxlength="20" placeholder="' + tr('Numero del tavolo', 'Table number') + '" value="' + esc(S.table) + '"></div>' : '';
+    var barField = '';
+    if (S.mode === 'bancone' && hasBars && S.bars.length > 1 && !S.barId) {
+      var barOpts = S.bars.map(function (b) {
+        return '<button data-act="bar" data-v="' + esc(b.id) + '" aria-pressed="' + (S.selectedBarId === b.id) + '">' + esc(b.name) + '</button>';
+      }).join('');
+      barField = '<div><p class="field-title">' + tr('Quale bancone?', 'Which bar?') + '</p><div class="opts">' + barOpts + '</div></div>';
+    }
+    var waitLine = '';
+    if (S.mode === 'bancone' && S.waitMinutes !== null) {
+      var approxWait = S.waitMinutes <= 2 ? tr('< 2 minuti', '< 2 min') : '~' + S.waitMinutes + ' min';
+      waitLine = '<div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--surface2);border-radius:10px"><span style="color:var(--muted);font-size:13px">⏱ ' + tr('Tempo stimato: ', 'Est. wait: ') + '</span><b>' + approxWait + '</b></div>';
+    }
     return '<section class="phone"><div class="sheet"><button class="back" data-act="back">' + tr('← Torna al menu', '← Back to menu') + '</button><h2>' + tr('Il tuo ordine', 'Your order') + '</h2>'
       + '<ul class="lines">' + ls + feeRow + '</ul><div class="total"><span>' + tr('Totale', 'Total') + '</span><span>' + eur(subtotal() + fee()) + '</span></div>'
-      + '<div><p class="field-title">' + tr('Dove lo vuoi?', 'Where do you want it?') + '</p><div class="opts">' + modes + '</div></div>' + tableField
+      + '<div><p class="field-title">' + tr('Dove lo vuoi?', 'Where do you want it?') + '</p><div class="opts">' + modes + '</div></div>' + barField + tableField + waitLine
       + '<div><p class="field-title">' + tr('Note per il barista', 'Note for the bartender') + ' <span class="small">' + tr('(facoltative)', '(optional)') + '</span></p><input class="input" id="note" maxlength="140" placeholder="' + tr('Es. senza ghiaccio, poco zucchero', 'E.g. no ice, less sugar') + '" value="' + esc(S.note) + '"></div>'
       + '<label class="check"><input type="checkbox" data-act="age"' + (S.age ? ' checked' : '') + '><span>' + tr('Ho almeno 18 anni. I drink alcolici si consegnano solo a maggiorenni: al ritiro può servire un documento.', 'I am at least 18. Alcohol is only served to adults: you may be asked for ID.') + '</span></label>'
       + '<button class="pay" data-act="pay"' + (S.busy ? ' disabled' : '') + '>' + (S.busy ? tr('Un attimo…', 'One moment…') : tr('Paga ', 'Pay ') + eur(subtotal() + fee())) + '</button>'
@@ -94,7 +117,8 @@
   function viewStatus() {
     var o = S.data;
     if (!o) return '<section class="phone"><div class="sheet"><p class="note">' + tr('Sto cercando il tuo ordine…', 'Looking for your order…') + '</p></div></section>';
-    var where = o.mode === 'tavolo' ? tr('Tavolo ', 'Table ') + esc(o.table_label) : tr('Bancone', 'Bar');
+    var barDisplayName = o.bar_id ? (barName(o.bar_id) || tr('Bancone', 'Bar')) : tr('Bancone', 'Bar');
+    var where = o.mode === 'tavolo' ? tr('Tavolo ', 'Table ') + esc(o.table_label) : barDisplayName;
     if (o.status === 'canceled') return '<section class="phone"><div class="sheet"><h2>' + tr('Ordine annullato', 'Order canceled') + '</h2><p class="small">' + tr('Se avevi già pagato, il bar ti rimborsa tutto: l’importo torna sulla tua carta in alcuni giorni lavorativi. Altrimenti non ti è stato addebitato nulla.', 'If you had already paid, the bar refunds everything: the money returns to your card within a few working days. Otherwise you have not been charged.') + '</p><button class="pay" data-act="newOrder">' + tr('Torna al menu', 'Back to menu') + '</button></div></section>';
     if (o.status === 'done') return '<section class="phone"><div class="sheet"><h2>' + tr('Ordine consegnato', 'Order delivered') + '</h2><p class="small">' + tr('Buona serata.', 'Enjoy your night.') + '</p><button class="pay" data-act="newOrder">' + tr('Ordina ancora', 'Order again') + '</button></div></section>';
     if (o.status === 'pending_payment') return '<section class="phone"><div class="sheet"><p class="eyebrow">' + esc(S.info.name) + '</p><h2>' + tr('Sto confermando il pagamento…', 'Confirming your payment…') + '</h2><p class="small">' + tr('Ci vuole qualche secondo. Non chiudere questa pagina.', 'It takes a few seconds. Do not close this page.') + '</p></div></section>';
@@ -102,8 +126,8 @@
     var steps = [tr('Ordine ricevuto', 'Order received'), tr('In preparazione', 'Being prepared'), tr('Pronto', 'Ready')].map(function (l, i) {
       return '<li class="' + (i < idx ? 'done' : i === idx ? 'now' : '') + '"><span class="dot"></span>' + l + '</li>';
     }).join('');
-    var ready = o.status === 'ready'
-      ? '<div class="ready-box"><b>' + tr('È pronto.', 'It’s ready.') + '</b> ' + (o.mode === 'tavolo' ? tr('Sta arrivando al ', 'On its way to ') + where.toLowerCase() + '.' : tr('Vai al bancone e mostra il numero #', 'Go to the bar and show number #') + o.number + '.') + '</div>' : '';
+    var ready = o.status === ‘ready’
+      ? ‘<div class="ready-box"><b>’ + tr(‘È pronto.’, ‘It\’s ready.’) + ‘</b> ‘ + (o.mode === ‘tavolo’ ? tr(‘Sta arrivando al ‘, ‘On its way to ‘) + where.toLowerCase() + ‘.’ : tr(‘Vai al ‘, ‘Go to ‘) + where + tr(‘ e mostra il numero #’, ‘ and show number #’) + o.number + ‘.’) + ‘</div>’ : ‘’;
     var ls = (o.items || []).map(function (i) { return '<li><span><span class="q">' + i.q + ' ×</span> ' + esc(i.name) + '</span></li>'; }).join('');
     return '<section class="phone"><div class="sheet"><p class="eyebrow">' + esc(S.info.name) + tr(' · il tuo numero', ' · your number') + '</p><p class="big-num">#' + o.number + '</p>'
       + '<p>' + (o.mode === 'tavolo' ? tr('Te lo portiamo al ', 'We bring it to your ') + where.toLowerCase() + '.' : tr('Ritiralo al bancone.', 'Pick it up at the bar.')) + tr(' Pagato ', ' Paid ') + eur(o.subtotal_cents + o.fee_cents) + '.</p>' + ready
@@ -183,6 +207,19 @@
   function startPolling() { stopPolling(); poll(); keepAwake(); timer = setInterval(poll, 4000); }
   function stopPolling() { if (timer) { clearInterval(timer); timer = null; } }
 
+  /* ---------- Wait time ---------- */
+  function fetchWaitTime() {
+    var bid = S.selectedBarId || (S.bars.length === 1 ? S.bars[0].id : null);
+    if (!bid) return;
+    api('/rest/v1/rpc/get_wait_minutes', {
+      method: 'POST',
+      body: JSON.stringify({ p_club_id: S.club, p_bar_id: bid })
+    }).then(function (mins) {
+      S.waitMinutes = typeof mins === 'number' ? mins : null;
+      if (S.screen === 'checkout') render();
+    }).catch(function () {});
+  }
+
   /* ---------- Pagamento ---------- */
   function pay() {
     if (S.busy) return;
@@ -195,7 +232,7 @@
     fetch(cfg.supabaseUrl + '/functions/v1/create-checkout', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: cfg.anonKey, Authorization: 'Bearer ' + cfg.anonKey },
-      body: JSON.stringify({ club: S.club, table: tbl, mode: S.mode, age_ok: true, note: S.note.trim(), items: lines().map(function (l) { return { id: l.id, q: l.q }; }) })
+      body: JSON.stringify({ club: S.club, table: tbl, mode: S.mode, age_ok: true, note: S.note.trim(), bar_id: S.selectedBarId || (S.bars.length === 1 ? S.bars[0].id : null) || null, items: lines().map(function (l) { return { id: l.id, q: l.q }; }) })
     }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); }).then(function (res) {
       if (!res.ok || !res.j.url) throw new Error((res.j && res.j.error) || tr('Pagamento non disponibile.', 'Payment unavailable.'));
       store('bancone_order', { id: res.j.order_id, t: res.j.token, club: S.club });
@@ -214,12 +251,13 @@
     if (a === 'age') { S.age = !!el.checked; render(); return; }
     if (a === 'lang') { S.lang = S.lang === 'en' ? 'it' : 'en'; store('bancone_lang', S.lang); document.documentElement.lang = S.lang; render(); return; }
     if (a === 'sound') { tone([660, 880], 0.12); }
+    else if (a === 'bar') { S.selectedBarId = v; fetchWaitTime(); render(); return; }
     else if (a === 'cat') S.cat = v;
     else if (a === 'inc') S.cart[id] = (S.cart[id] || 0) + 1;
     else if (a === 'dec') S.cart[id] = Math.max(0, (S.cart[id] || 0) - 1);
-    else if (a === 'checkout') S.screen = 'checkout';
+    else if (a === 'checkout') { S.screen = 'checkout'; if (S.mode === 'bancone') fetchWaitTime(); }
     else if (a === 'back') S.screen = 'menu';
-    else if (a === 'mode') S.mode = v;
+    else if (a === 'mode') { S.mode = v; if (v === 'bancone') fetchWaitTime(); }
     else if (a === 'pay') { pay(); return; }
     else if (a === 'closeToast') { document.getElementById('toast').hidden = true; document.title = baseTitle; return; }
     else if (a === 'newOrder') { stopPolling(); S.order = null; S.data = null; lastSeen = ''; store('bancone_order', null); S.cart = {}; S.screen = 'menu'; }
@@ -248,11 +286,15 @@
     }
     Promise.all([
       api('/rest/v1/clubs?id=eq.' + encodeURIComponent(S.club) + '&select=id,name,service_fee_cents'),
-      api('/rest/v1/menu_items?club_id=eq.' + encodeURIComponent(S.club) + '&available=eq.true&select=*&order=sort.asc')
+      api('/rest/v1/menu_items?club_id=eq.' + encodeURIComponent(S.club) + '&available=eq.true&select=*&order=sort.asc'),
+      api('/rest/v1/bars?club_id=eq.' + encodeURIComponent(S.club) + '&active=eq.true&order=sort.asc&select=id,name,avg_prep_minutes')
     ]).then(function (r) {
       if (!r[0][0]) { S.screen = 'error'; S.errMsg = tr('Locale non trovato. Controlla il QR code.', 'Venue not found. Please check the QR code.'); render(); return; }
-      S.info = r[0][0]; S.menu = r[1];
-      S.mode = S.table ? 'tavolo' : 'bancone';
+      S.info = r[0][0]; S.menu = r[1]; S.bars = r[2] || [];
+      // If QR has ?bar=xxx, pre-select that bar and default to bancone mode
+      if (S.barId) { S.selectedBarId = S.barId; }
+      else if (S.bars.length === 1) { S.selectedBarId = S.bars[0].id; }
+      S.mode = (S.table && !S.barId) ? 'tavolo' : 'bancone';
       // togli dal carrello i drink che non ci sono piu'
       Object.keys(S.cart).forEach(function (k) { if (!S.menu.some(function (m) { return m.id === k; })) delete S.cart[k]; });
       S.screen = S.order ? 'status' : (count() ? 'checkout' : 'menu');

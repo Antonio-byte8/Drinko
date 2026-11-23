@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Drinko · Venue Portal</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap">
+<link rel="stylesheet" href="../style.css">
+<script src="../config.js"></script>
+<script src="portal.js"></script>
+</head>
+<body class="portal-body">
+<div id="root"></div>
+<div id="portal-toast" class="portal-toast"></div>
+
+<script>
+(function () {
+  var S = { session: null, venue: null, stats: null, orders: [], booting: true, err: '', tab: 'login' };
+
+  function esc(s) { return PORTAL.esc(s); }
+  function eur(c) { return PORTAL.eur(c); }
+
+  /* ---------- Auth screens ---------- */
+  function viewAuth() {
+    var isLogin = S.tab !== 'signup';
+    return '<div class="auth-wrap"><div class="auth-box">'
+      + '<div class="auth-logo">Drinko</div>'
+      + '<h1>' + (isLogin ? 'Sign in to your venue' : 'Create your account') + '</h1>'
+      + '<div class="auth-tabs">'
+      + '<button class="auth-tab' + (isLogin ? ' active' : '') + '" data-act="tab" data-v="login">Sign in</button>'
+      + '<button class="auth-tab' + (!isLogin ? ' active' : '') + '" data-act="tab" data-v="signup">Sign up</button>'
+      + '</div>'
+      + (S.err ? '<div class="err">' + esc(S.err) + '</div>' : '')
+      + '<form id="auth-form">'
+      + '<div class="form-group"><label for="email">Email</label><input class="input" id="email" type="email" autocomplete="username" placeholder="you@venue.com" required></div>'
+      + '<div class="form-group"><label for="pw">Password</label><input class="input" id="pw" type="password" autocomplete="' + (isLogin ? 'current' : 'new') + '-password" placeholder="••••••••" required minlength="8"></div>'
+      + (!isLogin ? '<div class="form-group"><label for="vname">Venue name</label><input class="input" id="vname" placeholder="e.g. Club Vibe" required maxlength="60"></div>' : '')
+      + (!isLogin ? '<div class="form-group"><label for="vslug">Venue ID <span style="color:var(--muted);font-weight:400">(short, no spaces)</span></label><input class="input" id="vslug" placeholder="e.g. club-vibe" required maxlength="30" pattern="[a-z0-9\\-]{2,30}"></div>' : '')
+      + '<button class="btn btn-primary" style="width:100%;justify-content:center" type="submit" id="auth-btn">' + (isLogin ? 'Sign in' : 'Create account') + '</button>'
+      + '</form>'
+      + '<p class="small" style="text-align:center">By signing up you agree to our <a href="../privacy.html" style="color:var(--accent)">Privacy Policy</a>.</p>'
+      + '</div></div>';
+  }
+
+  /* ---------- Onboarding: create venue after first signup ---------- */
+  function viewOnboarding() {
+    return '<div class="auth-wrap"><div class="auth-box">'
+      + '<div class="auth-logo">Drinko</div>'
+      + '<h1>Set up your venue</h1>'
+      + '<p class="sub">Almost there — tell us about your venue.</p>'
+      + (S.err ? '<div class="err">' + esc(S.err) + '</div>' : '')
+      + '<form id="onboard-form">'
+      + '<div class="form-group"><label for="vname">Venue name</label><input class="input" id="vname" placeholder="e.g. Club Vibe" required maxlength="60"></div>'
+      + '<div class="form-group"><label for="vslug">Venue ID <span style="color:var(--muted);font-weight:400">(lowercase, no spaces — used in links)</span></label><input class="input" id="vslug" placeholder="e.g. club-vibe" required maxlength="30" pattern="[a-z0-9\\-]{2,30}"></div>'
+      + '<button class="btn btn-primary" style="width:100%;justify-content:center" type="submit" id="onboard-btn">Create venue</button>'
+      + '</form></div></div>';
+  }
+
+  /* ---------- Dashboard ---------- */
+  function viewDashboard() {
+    var venue = S.venue ? S.venue.club : null;
+    var stats = S.stats || {};
+    var stripeOk = venue && venue.stripe_account_id;
+    var pending = !stripeOk;
+
+    var banners = '';
+    if (pending) banners += '<div class="card" style="border-color:var(--warn);margin-bottom:20px"><div class="card-body" style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap"><div><b style="font-family:var(--display)">Connect Stripe to accept payments</b><p class="small" style="margin-top:4px">Customers can\'t order until your Stripe account is set up.</p></div><a href="setup.html" class="btn btn-secondary btn-sm">Set up Stripe →</a></div></div>';
+
+    return '<div class="portal"><nav id="nav"></nav><div class="portal-main"><div class="portal-content">'
+      + '<div class="page-header"><div><h1>Dashboard</h1><p>Welcome back — here\'s what\'s happening today.</p></div></div>'
+      + banners
+      + '<div class="stats-grid">'
+      + '<div class="stat-card"><div class="stat-label">Orders today</div><div class="stat-value">' + (stats.ordersToday || 0) + '</div></div>'
+      + '<div class="stat-card"><div class="stat-label">Revenue today</div><div class="stat-value">' + eur(stats.revenueToday || 0) + '</div></div>'
+      + '<div class="stat-card"><div class="stat-label">Active orders</div><div class="stat-value">' + (stats.activeOrders || 0) + '</div></div>'
+      + '<div class="stat-card"><div class="stat-label">Service fees collected</div><div class="stat-value">' + eur(stats.feesToday || 0) + '</div><div class="stat-sub">Drinko fee (€0.40/order)</div></div>'
+      + '</div>'
+      + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">'
+      + quickLink('menu.html', 'Manage Menu', 'Add or edit your drink menu.', '☰')
+      + quickLink('bars.html', 'Configure Bars', 'Set up bar areas and prep times.', '⬡')
+      + quickLink('qr.html', 'Print QR Codes', 'Generate table and bar QR codes.', '▦')
+      + quickLink('staff.html', 'Manage Staff', 'Add bartenders and managers.', '◎')
+      + '</div>'
+      + '</div></div></div>';
+  }
+
+  function quickLink(href, title, desc, icon) {
+    return '<a href="' + href + '" class="card" style="text-decoration:none;display:block;transition:border-color 150ms" onmouseover="this.style.borderColor=\'var(--accent)\'" onmouseout="this.style.borderColor=\'var(--line)\'">'
+      + '<div class="card-body" style="display:flex;gap:14px;align-items:flex-start">'
+      + '<span style="font-size:22px;line-height:1;margin-top:2px">' + icon + '</span>'
+      + '<div><b style="font-family:var(--display);font-size:15px">' + title + '</b><p class="small" style="margin-top:3px">' + desc + '</p></div>'
+      + '</div></a>';
+  }
+
+  /* ---------- Render ---------- */
+  function render() {
+    var root = document.getElementById('root');
+    if (S.booting) { root.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh"><p class="note">Loading…</p></div>'; return; }
+    if (!S.session) { root.innerHTML = viewAuth(); return; }
+    if (S.session && !S.venue) { root.innerHTML = viewOnboarding(); return; }
+    root.innerHTML = viewDashboard();
+    document.getElementById('nav').outerHTML = '';
+    document.querySelector('.portal nav, #nav') && (document.querySelector('.portal nav, #nav').outerHTML = PORTAL.renderNav('index.html', S.venue && S.venue.club.name, S.venue && S.venue.role));
+    var navEl = document.querySelector('.sidebar');
+    if (navEl) {
+      var logoutBtn = document.getElementById('nav-logout');
+      if (logoutBtn) logoutBtn.addEventListener('click', function () { PORTAL.signOut(); });
+    }
+  }
+
+  function renderDashboard() {
+    var root = document.getElementById('root');
+    root.innerHTML = viewDashboard();
+    var portal = root.querySelector('.portal');
+    if (portal) {
+      var nav = portal.querySelector('nav');
+      if (nav) nav.outerHTML = PORTAL.renderNav('index.html', S.venue && S.venue.club.name, S.venue && S.venue.role);
+    }
+    var logoutBtn = document.getElementById('nav-logout');
+    if (logoutBtn) logoutBtn.addEventListener('click', function () { PORTAL.signOut(); });
+  }
+
+  /* ---------- Load stats ---------- */
+  function loadStats() {
+    if (!S.session || !S.venue) return;
+    var cid = encodeURIComponent(S.venue.club.id);
+    var today = new Date(); today.setHours(0, 0, 0, 0);
+    var since = encodeURIComponent(today.toISOString());
+    Promise.all([
+      PORTAL.api(S.session, 'orders?club_id=eq.' + cid + '&status=in.(new,prep,ready)&select=id'),
+      PORTAL.api(S.session, 'orders?club_id=eq.' + cid + '&status=in.(new,prep,ready,done)&created_at=gte.' + since + '&select=subtotal_cents,fee_cents,status')
+    ]).then(function (r) {
+      var active = r[0] || [];
+      var today = r[1] || [];
+      var done = today.filter(function (o) { return o.status === 'done'; });
+      S.stats = {
+        activeOrders: active.length,
+        ordersToday: today.length,
+        revenueToday: done.reduce(function (s, o) { return s + (o.subtotal_cents || 0); }, 0),
+        feesToday: done.reduce(function (s, o) { return s + (o.fee_cents || 0); }, 0)
+      };
+      renderDashboard();
+    }).catch(function () {});
+  }
+
+  /* ---------- Events ---------- */
+  document.addEventListener('click', function (e) {
+    var el = e.target.closest('[data-act]');
+    if (!el) return;
+    if (el.dataset.act === 'tab') { S.tab = el.dataset.v; S.err = ''; render(); }
+  });
+
+  document.addEventListener('submit', function (e) {
+    if (e.target.id === 'auth-form') {
+      e.preventDefault();
+      var email = document.getElementById('email').value.trim();
+      var pw = document.getElementById('pw').value;
+      var btn = document.getElementById('auth-btn');
+      btn.disabled = true; btn.textContent = 'Please wait…'; S.err = '';
+      if (S.tab === 'login') {
+        PORTAL.authCall('password', { email: email, password: pw }).then(function (sess) {
+          S.session = sess; PORTAL.saveSession(sess);
+          return PORTAL.getVenue(sess);
+        }).then(function (v) {
+          S.venue = v; S.booting = false; render(); loadStats();
+        }).catch(function (er) { S.err = er.message; btn.disabled = false; btn.textContent = 'Sign in'; render(); });
+      } else {
+        var vname = (document.getElementById('vname') || {}).value || '';
+        var vslug = (document.getElementById('vslug') || {}).value || '';
+        PORTAL.signUp(email, pw).then(function (j) {
+          if (j && j.access_token) {
+            var sess = { access_token: j.access_token, refresh_token: j.refresh_token, user_id: j.user && j.user.id, expires_at: Date.now() + (j.expires_in || 3600) * 1000 - 60000 };
+            S.session = sess; PORTAL.saveSession(sess);
+          }
+          return PORTAL.authCall('password', { email: email, password: pw });
+        }).then(function (sess) {
+          S.session = sess; PORTAL.saveSession(sess);
+          if (vname && vslug) return PORTAL.fn(sess, 'venue-create', { name: vname.trim(), slug: vslug.trim().toLowerCase() });
+        }).then(function () {
+          return PORTAL.getVenue(S.session);
+        }).then(function (v) {
+          S.venue = v; S.booting = false; render(); loadStats();
+        }).catch(function (er) { S.err = er.message; btn.disabled = false; btn.textContent = 'Create account'; render(); });
+      }
+    }
+
+    if (e.target.id === 'onboard-form') {
+      e.preventDefault();
+      var vname = document.getElementById('vname').value.trim();
+      var vslug = document.getElementById('vslug').value.trim().toLowerCase();
+      var btn = document.getElementById('onboard-btn');
+      btn.disabled = true; btn.textContent = 'Creating…'; S.err = '';
+      PORTAL.fn(S.session, 'venue-create', { name: vname, slug: vslug }).then(function () {
+        return PORTAL.getVenue(S.session);
+      }).then(function (v) {
+        S.venue = v; render(); loadStats();
+      }).catch(function (er) { S.err = er.message; btn.disabled = false; btn.textContent = 'Create venue'; render(); });
+    }
+  });
+
+  /* ---------- Boot ---------- */
+  S.session = PORTAL.loadSession();
+  S.booting = false;
+  render();
+  if (S.session) {
+    PORTAL.getVenue(S.session).then(function (v) {
+      S.venue = v; render(); loadStats();
+    }).catch(function () { S.session = null; PORTAL.saveSession(null); render(); });
+  }
+})();
+</script>
+</body>
+</html>

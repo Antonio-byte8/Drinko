@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Drinko · Staff</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap">
+<link rel="stylesheet" href="../style.css">
+<script src="../config.js"></script>
+<script src="portal.js"></script>
+</head>
+<body class="portal-body">
+<div id="root"></div>
+<div id="portal-toast" class="portal-toast"></div>
+<div id="modal" hidden></div>
+
+<script>
+(function () {
+  var S = { session: null, venue: null, staff: [], invites: [] };
+
+  function esc(s) { return PORTAL.esc(s); }
+
+  var ROLE_LABELS = { owner: 'Owner', manager: 'Manager', barista: 'Bartender' };
+  var ROLE_BADGE = { owner: 'badge-green', manager: 'badge-yellow', barista: 'badge-muted' };
+
+  /* ---------- Load ---------- */
+  function load() {
+    if (!S.venue) return Promise.resolve();
+    var cid = encodeURIComponent(S.venue.club.id);
+    return Promise.all([
+      PORTAL.api(S.session, 'staff?club_id=eq.' + cid + '&select=user_id,role'),
+      PORTAL.api(S.session, 'venue_invites?club_id=eq.' + cid + '&used_at=is.null&order=created_at.desc&select=id,email,role,expires_at,created_at')
+    ]).then(function (r) {
+      S.staff = r[0] || [];
+      S.invites = r[1] || [];
+      render();
+    });
+  }
+
+  /* ---------- Render ---------- */
+  function renderPage() {
+    var myUserId = S.session && S.session.user_id;
+    var isOwner = S.venue && S.venue.role === 'owner';
+
+    var staffRows = S.staff.map(function (s) {
+      var isMe = s.user_id === myUserId;
+      return '<tr>'
+        + '<td style="font-family:monospace;font-size:12px;color:var(--muted)">' + esc(s.user_id.slice(0, 8) + '…') + (isMe ? ' <b style="color:var(--ok)">(you)</b>' : '') + '</td>'
+        + '<td><span class="badge ' + (ROLE_BADGE[s.role] || 'badge-muted') + '">' + (ROLE_LABELS[s.role] || s.role) + '</span></td>'
+        + '<td style="text-align:right">'
+        + (!isMe && isOwner && s.role !== 'owner' ? '<button class="btn btn-danger btn-sm" data-act="remove-staff" data-id="' + esc(s.user_id) + '">Remove</button>' : '')
+        + '</td></tr>';
+    }).join('');
+
+    var inviteRows = S.invites.map(function (inv) {
+      var exp = new Date(inv.expires_at);
+      var expired = exp < new Date();
+      return '<tr>'
+        + '<td>' + esc(inv.email) + '</td>'
+        + '<td><span class="badge ' + (ROLE_BADGE[inv.role] || 'badge-muted') + '">' + (ROLE_LABELS[inv.role] || inv.role) + '</span></td>'
+        + '<td><span class="badge ' + (expired ? 'badge-red' : 'badge-yellow') + '">' + (expired ? 'Expired' : 'Pending') + '</span></td>'
+        + '<td style="text-align:right"><button class="btn btn-secondary btn-sm" data-act="copy-invite" data-id="' + esc(inv.id) + '" data-token="' + esc(inv.token || '') + '">Copy link</button></td>'
+        + '</tr>';
+    }).join('');
+
+    return '<div class="page-header"><div><h1>Staff</h1><p>Manage who can access the bar view.</p></div>'
+      + (isOwner ? '<div class="page-actions"><button class="btn btn-primary" data-act="invite">+ Invite staff</button></div>' : '')
+      + '</div>'
+
+      + '<div class="card" style="margin-bottom:16px"><div class="card-header"><h2>Current staff</h2></div>'
+      + (S.staff.length
+          ? '<table class="data-table"><thead><tr><th>User ID</th><th>Role</th><th></th></tr></thead><tbody>' + staffRows + '</tbody></table>'
+          : '<div class="card-body"><p class="note">No staff yet.</p></div>')
+      + '</div>'
+
+      + '<div class="card"><div class="card-header"><h2>Pending invites</h2></div>'
+      + (S.invites.length
+          ? '<table class="data-table"><thead><tr><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>' + inviteRows + '</tbody></table>'
+          : '<div class="card-body"><p class="note">No pending invites.</p></div>')
+      + '</div>'
+
+      + '<div class="card" style="margin-top:16px"><div class="card-body">'
+      + '<b style="font-family:var(--display)">About staff roles</b>'
+      + '<ul style="margin-top:10px;padding-left:18px;display:flex;flex-direction:column;gap:6px">'
+      + '<li class="small"><b>Owner</b> — full access, can manage menu, bars, staff, and settings</li>'
+      + '<li class="small"><b>Manager</b> — can manage menu and bars, cannot change staff or Stripe</li>'
+      + '<li class="small"><b>Bartender</b> — can only see and update orders, and mark drinks as unavailable</li>'
+      + '</ul>'
+      + '<p class="small" style="margin-top:12px">Each staff member logs in at <code style="background:var(--surface2);padding:2px 6px;border-radius:6px">bar.html</code> with their email and password.</p>'
+      + '</div></div>';
+  }
+
+  function render() {
+    var root = document.getElementById('root');
+    root.innerHTML = '<div class="portal">' + PORTAL.renderNav('staff.html', S.venue && S.venue.club.name, S.venue && S.venue.role) + '<div class="portal-main"><div class="portal-content">' + renderPage() + '</div></div></div>';
+    var logoutBtn = document.getElementById('nav-logout');
+    if (logoutBtn) logoutBtn.addEventListener('click', function () { PORTAL.signOut(); });
+  }
+
+  /* ---------- Invite modal ---------- */
+  function showInviteModal() {
+    var modalEl = document.getElementById('modal');
+    modalEl.hidden = false;
+    modalEl.innerHTML = '<div class="modal-overlay" id="modal-overlay"><div class="modal-box">'
+      + '<h2>Invite a staff member</h2>'
+      + '<p class="small">They\'ll receive a link to set up their account. They sign in at bar.html.</p>'
+      + '<div class="form-group"><label>Email address</label><input class="input" id="inv-email" type="email" placeholder="bartender@venue.com" required></div>'
+      + '<div class="form-group"><label>Role</label>'
+      + '<select class="input" id="inv-role"><option value="barista">Bartender</option><option value="manager">Manager</option></select>'
+      + '</div>'
+      + '<div class="modal-footer">'
+      + '<button class="btn btn-secondary" data-act="close-modal">Cancel</button>'
+      + '<button class="btn btn-primary" data-act="send-invite">Send invite</button>'
+      + '</div></div></div>';
+  }
+
+  function closeModal() { var m = document.getElementById('modal'); m.hidden = true; m.innerHTML = ''; }
+
+  /* ---------- Actions ---------- */
+  function sendInvite() {
+    var email = (document.getElementById('inv-email') || {}).value;
+    var role = (document.getElementById('inv-role') || {}).value;
+    if (!email) { PORTAL.toast('Enter an email address.', 'error'); return; }
+    var btn = document.querySelector('[data-act="send-invite"]');
+    if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+    PORTAL.fn(S.session, 'invite-staff', { club_id: S.venue.club.id, email: email, role: role }).then(function () {
+      closeModal(); PORTAL.toast('Invite sent to ' + email + '.'); load();
+    }).catch(function (er) { PORTAL.toast(er.message, 'error'); if (btn) { btn.disabled = false; btn.textContent = 'Send invite'; } });
+  }
+
+  function removeStaff(userId) {
+    if (!confirm('Remove this staff member?')) return;
+    PORTAL.api(S.session, 'staff?user_id=eq.' + encodeURIComponent(userId), { method: 'DELETE', headers: { Prefer: 'return=minimal' } })
+      .then(function () { PORTAL.toast('Staff member removed.'); load(); })
+      .catch(function (er) { PORTAL.toast(er.message, 'error'); });
+  }
+
+  /* ---------- Events ---------- */
+  document.addEventListener('click', function (e) {
+    var el = e.target.closest('[data-act]');
+    if (!el) return;
+    var act = el.dataset.act;
+    if (act === 'invite') { showInviteModal(); }
+    else if (act === 'send-invite') { sendInvite(); }
+    else if (act === 'close-modal') { closeModal(); }
+    else if (act === 'remove-staff') { removeStaff(el.dataset.id); }
+    else if (act === 'copy-invite') {
+      var inviteUrl = location.href.split('/venue/')[0] + '/venue/accept-invite.html?token=' + encodeURIComponent(el.dataset.token || el.dataset.id);
+      (navigator.clipboard ? navigator.clipboard.writeText(inviteUrl) : Promise.reject()).then(function () {
+        PORTAL.toast('Invite link copied.');
+      }).catch(function () { PORTAL.toast('Could not copy. URL: ' + inviteUrl); });
+    }
+  });
+
+  document.addEventListener('click', function (e) { if (e.target.id === 'modal-overlay') closeModal(); });
+
+  /* ---------- Boot ---------- */
+  S.session = PORTAL.loadSession();
+  if (!PORTAL.requireAuth(S.session)) return;
+  PORTAL.getVenue(S.session).then(function (v) {
+    S.venue = v;
+    if (!v) { location.href = 'index.html'; return; }
+    return load();
+  }).catch(function () { location.href = 'index.html'; });
+})();
+</script>
+</body>
+</html>

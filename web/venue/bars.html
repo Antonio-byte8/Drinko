@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Drinko · Bar Areas</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap">
+<link rel="stylesheet" href="../style.css">
+<script src="../config.js"></script>
+<script src="portal.js"></script>
+</head>
+<body class="portal-body">
+<div id="root"></div>
+<div id="portal-toast" class="portal-toast"></div>
+<div id="modal" hidden></div>
+
+<script>
+(function () {
+  var S = { session: null, venue: null, bars: [] };
+
+  function esc(s) { return PORTAL.esc(s); }
+
+  /* ---------- Load ---------- */
+  function load() {
+    if (!S.venue) return Promise.resolve();
+    var cid = encodeURIComponent(S.venue.club.id);
+    return PORTAL.api(S.session, 'bars?club_id=eq.' + cid + '&order=sort.asc&select=*').then(function (rows) {
+      S.bars = rows || [];
+      render();
+    });
+  }
+
+  /* ---------- Render ---------- */
+  function renderPage() {
+    var content = '<div class="page-header"><div><h1>Bar Areas</h1><p>Define the bar areas customers can pick up from.</p></div>'
+      + '<div class="page-actions"><button class="btn btn-primary" data-act="new-bar">+ Add bar area</button></div></div>';
+
+    if (!S.bars.length) {
+      content += '<div class="empty-state"><h3>No bar areas yet</h3><p>Add at least one bar so customers know where to collect their order. For venues with multiple bars, add one per area.</p><button class="btn btn-primary" data-act="new-bar">+ Add bar area</button></div>';
+    } else {
+      content += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px">'
+        + S.bars.map(function (b) {
+          return '<div class="card">'
+            + '<div class="card-body" style="display:flex;flex-direction:column;gap:14px">'
+            + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">'
+            + '<div><b style="font-family:var(--display);font-size:17px">' + esc(b.name) + '</b><p class="small" style="margin-top:3px">ID: <code>' + esc(b.id) + '</code></p></div>'
+            + '<span class="badge ' + (b.active ? 'badge-green' : 'badge-muted') + '">' + (b.active ? 'Active' : 'Inactive') + '</span>'
+            + '</div>'
+            + '<div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--surface2);border-radius:10px">'
+            + '<svg width="18" height="18" viewBox="0 0 18 18" fill="none" style="flex:none"><circle cx="9" cy="9" r="7" stroke="var(--muted)" stroke-width="1.4"/><path d="M9 5v4l3 2" stroke="var(--muted)" stroke-width="1.4" stroke-linecap="round"/></svg>'
+            + '<span class="small">Avg. prep time: <b style="color:var(--fg)">' + b.avg_prep_minutes + ' min</b></span>'
+            + '</div>'
+            + '<div style="display:flex;gap:8px">'
+            + '<button class="btn btn-secondary btn-sm" data-act="edit-bar" data-id="' + esc(b.id) + '" style="flex:1">Edit</button>'
+            + '<button class="btn btn-secondary btn-sm" data-act="toggle-bar" data-id="' + esc(b.id) + '" data-active="' + b.active + '">' + (b.active ? 'Disable' : 'Enable') + '</button>'
+            + '<button class="btn btn-danger btn-sm btn-icon" data-act="delete-bar" data-id="' + esc(b.id) + '" title="Delete">✕</button>'
+            + '</div></div></div>';
+        }).join('')
+        + '</div>';
+
+      content += '<div class="card" style="margin-top:20px"><div class="card-body">'
+        + '<b style="font-family:var(--display)">About bar areas</b>'
+        + '<p class="small" style="margin-top:8px">Each bar area has its own QR codes and order queue. Customers see the estimated wait time per bar before ordering. Set a realistic average prep time — if your bartender takes 4 minutes per order, set 4.</p>'
+        + '</div></div>';
+    }
+    return content;
+  }
+
+  function render() {
+    var root = document.getElementById('root');
+    root.innerHTML = '<div class="portal">' + PORTAL.renderNav('bars.html', S.venue && S.venue.club.name, S.venue && S.venue.role) + '<div class="portal-main"><div class="portal-content">' + renderPage() + '</div></div></div>';
+    var logoutBtn = document.getElementById('nav-logout');
+    if (logoutBtn) logoutBtn.addEventListener('click', function () { PORTAL.signOut(); });
+  }
+
+  /* ---------- Modal ---------- */
+  function showBarModal(bar) {
+    var isEdit = !!bar;
+    var modalEl = document.getElementById('modal');
+    modalEl.hidden = false;
+    var cid = S.venue.club.id;
+    var defaultSlug = '';
+    modalEl.innerHTML = '<div class="modal-overlay" id="modal-overlay"><div class="modal-box">'
+      + '<h2>' + (isEdit ? 'Edit bar area' : 'New bar area') + '</h2>'
+      + '<div class="form-group"><label>Display name</label><input class="input" id="b-name" placeholder="e.g. Main Bar" value="' + esc((bar && bar.name) || '') + '" required maxlength="60" id="b-name"></div>'
+      + '<div class="form-group"><label>Bar ID <span style="font-weight:400;color:var(--muted)">(lowercase, no spaces)</span></label><input class="input" id="b-id" placeholder="e.g. ' + esc(cid) + '-main" value="' + esc((bar && bar.id) || '') + '" ' + (isEdit ? 'disabled' : 'required') + ' maxlength="40" pattern="[a-z0-9\\-]{2,40}"></div>'
+      + '<div class="form-group"><label>Average prep time (minutes)</label><input class="input" id="b-prep" type="number" min="1" max="30" value="' + ((bar && bar.avg_prep_minutes) || 5) + '" required></div>'
+      + '<div class="modal-footer">'
+      + '<button class="btn btn-secondary" data-act="close-modal">Cancel</button>'
+      + '<button class="btn btn-primary" data-act="save-bar" data-id="' + esc((bar && bar.id) || '') + '">' + (isEdit ? 'Save' : 'Create bar') + '</button>'
+      + '</div></div></div>';
+
+    if (!isEdit) {
+      var nameInput = document.getElementById('b-name');
+      var idInput = document.getElementById('b-id');
+      if (nameInput && idInput) {
+        nameInput.addEventListener('input', function () {
+          if (!idInput._touched) idInput.value = cid + '-' + nameInput.value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30);
+        });
+        idInput.addEventListener('input', function () { idInput._touched = true; });
+      }
+    }
+  }
+
+  function closeModal() { var m = document.getElementById('modal'); m.hidden = true; m.innerHTML = ''; }
+
+  /* ---------- CRUD ---------- */
+  function saveBar(id) {
+    var name = document.getElementById('b-name').value.trim();
+    var barId = id || document.getElementById('b-id').value.trim();
+    var prep = parseInt(document.getElementById('b-prep').value, 10);
+    if (!name || !barId || isNaN(prep)) { PORTAL.toast('Please fill in all fields.', 'error'); return; }
+    var row = { name: name, avg_prep_minutes: prep };
+    if (!id) { row.id = barId; row.club_id = S.venue.club.id; row.sort = S.bars.length * 10; }
+    var method = id ? 'PATCH' : 'POST';
+    var path = id ? 'bars?id=eq.' + encodeURIComponent(id) : 'bars';
+    PORTAL.api(S.session, path, { method: method, headers: { Prefer: 'return=minimal' }, body: JSON.stringify(row) })
+      .then(function () { closeModal(); PORTAL.toast(id ? 'Bar updated.' : 'Bar created.'); load(); })
+      .catch(function (er) { PORTAL.toast(er.message, 'error'); });
+  }
+
+  function toggleBar(id, active) {
+    PORTAL.api(S.session, 'bars?id=eq.' + encodeURIComponent(id), {
+      method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ active: !active })
+    }).then(function () { PORTAL.toast(active ? 'Bar disabled.' : 'Bar enabled.'); load(); })
+      .catch(function (er) { PORTAL.toast(er.message, 'error'); });
+  }
+
+  function deleteBar(id) {
+    if (!confirm('Delete this bar area? Orders directed here will lose their bar reference.')) return;
+    PORTAL.api(S.session, 'bars?id=eq.' + encodeURIComponent(id), { method: 'DELETE', headers: { Prefer: 'return=minimal' } })
+      .then(function () { PORTAL.toast('Bar deleted.'); load(); })
+      .catch(function (er) { PORTAL.toast(er.message, 'error'); });
+  }
+
+  /* ---------- Events ---------- */
+  document.addEventListener('click', function (e) {
+    var el = e.target.closest('[data-act]');
+    if (!el) return;
+    var act = el.dataset.act, id = el.dataset.id;
+    if (act === 'new-bar') { showBarModal(null); }
+    else if (act === 'edit-bar') { var bar = S.bars.filter(function (b) { return b.id === id; })[0]; if (bar) showBarModal(bar); }
+    else if (act === 'toggle-bar') { toggleBar(id, el.dataset.active === 'true'); }
+    else if (act === 'delete-bar') { deleteBar(id); }
+    else if (act === 'save-bar') { saveBar(id); }
+    else if (act === 'close-modal') { closeModal(); }
+  });
+
+  document.addEventListener('click', function (e) { if (e.target.id === 'modal-overlay') closeModal(); });
+
+  /* ---------- Boot ---------- */
+  S.session = PORTAL.loadSession();
+  if (!PORTAL.requireAuth(S.session)) return;
+  PORTAL.getVenue(S.session).then(function (v) {
+    S.venue = v;
+    if (!v) { location.href = 'index.html'; return; }
+    return load();
+  }).catch(function () { location.href = 'index.html'; });
+})();
+</script>
+</body>
+</html>

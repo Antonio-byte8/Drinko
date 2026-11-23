@@ -61,9 +61,11 @@ export async function handle(req: Request, env: Env, fetchFn: typeof fetch = fet
   const clubId = String(body?.club ?? '');
   const table = String(body?.table ?? '').trim();
   const mode = body?.mode;
+  const barId = body?.bar_id ? String(body.bar_id) : null;
   if (!/^[a-z0-9-]{2,30}$/.test(clubId)) return json({ error: 'Locale non valido.' }, 400);
   if (mode !== 'tavolo' && mode !== 'bancone') return json({ error: 'Scegli se vuoi il drink al tavolo o al bancone.' }, 400);
   if (!/^[A-Za-z0-9 \-]{1,20}$/.test(table)) return json({ error: 'Numero del tavolo non valido.' }, 400);
+  if (barId && !/^[a-z0-9-]{2,40}$/.test(barId)) return json({ error: 'Invalid bar.' }, 400);
   const note = String(body?.note ?? '').replace(/[\u0000-\u001f]+/g, ' ').trim().slice(0, 140);
   if (body?.age_ok !== true) return json({ error: 'Devi confermare di avere almeno 18 anni.' }, 400);
 
@@ -101,6 +103,7 @@ export async function handle(req: Request, env: Env, fetchFn: typeof fetch = fet
     headers: { Prefer: 'return=representation' },
     body: JSON.stringify({
       club_id: clubId, table_label: table, mode, note,
+      bar_id: barId || null,
       items: priced.items, subtotal_cents: priced.subtotal_cents, fee_cents: fee,
     }),
   });

@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Drinko · QR Codes</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap">
+<link rel="stylesheet" href="../style.css">
+<script src="../config.js"></script>
+<script src="../qr-lib.js"></script>
+<script src="portal.js"></script>
+<style>
+.qr-sheet{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:16px;margin-top:24px}
+.qr-tag{background:#fff;color:#111;border-radius:14px;padding:16px;display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;break-inside:avoid}
+.qr-tag svg{width:100%;height:auto;display:block}
+.qr-tag b{font-family:'Space Grotesk',sans-serif;font-size:20px;color:#111}
+.qr-tag .club-name{font-size:12px;color:#555}
+.qr-tag .hint{font-size:11px;color:#777}
+.qr-tag .bar-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#333;background:#f0f0f0;padding:3px 8px;border-radius:6px}
+@media print{
+  .no-print{display:none!important}
+  body{background:#fff;color:#000;padding:0}
+  .qr-sheet{grid-template-columns:repeat(3,1fr);gap:10mm}
+  .qr-tag{border:1px solid #bbb;border-radius:6px}
+}
+</style>
+</head>
+<body class="portal-body">
+<div id="root"></div>
+<div id="portal-toast" class="portal-toast"></div>
+
+<script>
+(function () {
+  var S = { session: null, venue: null, bars: [], from: 1, to: 20, bar: '__all__' };
+
+  function esc(s) { return PORTAL.esc(s); }
+
+  /* ---------- Load ---------- */
+  function load() {
+    if (!S.venue) return Promise.resolve();
+    var cid = encodeURIComponent(S.venue.club.id);
+    return PORTAL.api(S.session, 'bars?club_id=eq.' + cid + '&active=eq.true&order=sort.asc&select=*').then(function (rows) {
+      S.bars = rows || [];
+      render();
+    });
+  }
+
+  /* ---------- QR generation ---------- */
+  function qrSvg(text) {
+    var q = new QRCodeLib.QRCode(-1, QRCodeLib.QRErrorCorrectLevel.M);
+    q.addData(text); q.make();
+    var n = q.getModuleCount(), pad = 4, d = '';
+    for (var r = 0; r < n; r++) for (var c = 0; c < n; c++) if (q.isDark(r, c)) d += 'M' + (c + pad) + ' ' + (r + pad) + 'h1v1h-1z';
+    var size = n + pad * 2;
+    return '<svg viewBox="0 0 ' + size + ' ' + size + '" shape-rendering="crispEdges" role="img"><rect width="' + size + '" height="' + size + '" fill="#fff"/><path d="' + d + '" fill="#000"/></svg>';
+  }
+
+  function tag(url, title, venueName, barName) {
+    return '<div class="qr-tag">' + qrSvg(url)
+      + '<b>' + esc(title) + '</b>'
+      + (barName ? '<span class="bar-label">' + esc(barName) + '</span>' : '')
+      + '<span class="club-name">' + esc(venueName) + '</span>'
+      + '<span class="hint">Scan to order & pay</span>'
+      + '</div>';
+  }
+
+  function buildTags() {
+    var club = S.venue.club;
+    var base = location.href.split('/venue/')[0] + '/';
+    var clubParam = encodeURIComponent(club.id);
+    var tags = [];
+    var selectedBars = S.bar === '__all__' ? S.bars : S.bars.filter(function (b) { return b.id === S.bar; });
+
+    // For each selected bar, add a walk-up QR for that bar
+    selectedBars.forEach(function (b) {
+      tags.push(tag(base + 'index.html?club=' + clubParam + '&bar=' + encodeURIComponent(b.id), 'Walk-up', club.name, b.name));
+    });
+
+    // Table QRs
+    var from = Math.max(1, S.from), to = Math.min(999, Math.max(from, S.to));
+    for (var t = from; t <= to; t++) {
+      tags.push(tag(base + 'index.html?club=' + clubParam + '&table=' + t, 'Table ' + t, club.name, null));
+    }
+    return tags;
+  }
+
+  /* ---------- Render ---------- */
+  function renderPage() {
+    var barOptions = '<option value="__all__">All bars (one QR per bar)</option>'
+      + S.bars.map(function (b) { return '<option value="' + esc(b.id) + '"' + (S.bar === b.id ? ' selected' : '') + '>' + esc(b.name) + '</option>'; }).join('');
+
+    return '<div class="no-print"><div class="page-header"><div><h1>QR Codes</h1><p>Generate and print QR codes for each table and bar area.</p></div><div class="page-actions"><button class="btn btn-primary" id="print-btn" onclick="window.print()">Print</button></div></div>'
+      + '<div class="card" style="margin-bottom:16px"><div class="card-body">'
+      + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px">'
+      + '<div class="form-group"><label>Bar area</label><select class="input" id="sel-bar">' + barOptions + '</select></div>'
+      + '<div class="form-group"><label>Tables from</label><input class="input" id="sel-from" type="number" min="1" max="999" value="' + S.from + '"></div>'
+      + '<div class="form-group"><label>Tables to</label><input class="input" id="sel-to" type="number" min="1" max="999" value="' + S.to + '"></div>'
+      + '</div>'
+      + (S.bars.length === 0 ? '<p class="small" style="margin-top:12px;color:var(--warn)">⚠ No bar areas yet. <a href="bars.html" style="color:var(--warn)">Set up your bars first</a>.</p>' : '')
+      + '</div></div></div>'
+      + '<div class="qr-sheet" id="qr-sheet">' + (S.venue ? buildTags().join('') : '') + '</div>';
+  }
+
+  function render() {
+    var root = document.getElementById('root');
+    root.innerHTML = '<div class="portal">' + PORTAL.renderNav('qr.html', S.venue && S.venue.club.name, S.venue && S.venue.role) + '<div class="portal-main"><div class="portal-content">' + renderPage() + '</div></div></div>';
+    var logoutBtn = document.getElementById('nav-logout');
+    if (logoutBtn) logoutBtn.addEventListener('click', function () { PORTAL.signOut(); });
+    bindInputs();
+  }
+
+  function bindInputs() {
+    var selBar = document.getElementById('sel-bar');
+    var selFrom = document.getElementById('sel-from');
+    var selTo = document.getElementById('sel-to');
+    if (selBar) selBar.addEventListener('change', function () { S.bar = selBar.value; rebuildSheet(); });
+    if (selFrom) selFrom.addEventListener('input', function () { S.from = parseInt(selFrom.value, 10) || 1; rebuildSheet(); });
+    if (selTo) selTo.addEventListener('input', function () { S.to = parseInt(selTo.value, 10) || 1; rebuildSheet(); });
+  }
+
+  function rebuildSheet() {
+    var sheet = document.getElementById('qr-sheet');
+    if (sheet) sheet.innerHTML = buildTags().join('');
+  }
+
+  /* ---------- Boot ---------- */
+  S.session = PORTAL.loadSession();
+  if (!PORTAL.requireAuth(S.session)) return;
+  PORTAL.getVenue(S.session).then(function (v) {
+    S.venue = v;
+    if (!v) { location.href = 'index.html'; return; }
+    return load();
+  }).catch(function () { location.href = 'index.html'; });
+})();
+</script>
+</body>
+</html>

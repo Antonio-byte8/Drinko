@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Drinko · Settings</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap">
+<link rel="stylesheet" href="../style.css">
+<script src="../config.js"></script>
+<script src="portal.js"></script>
+</head>
+<body class="portal-body">
+<div id="root"></div>
+<div id="portal-toast" class="portal-toast"></div>
+
+<script>
+(function () {
+  var S = { session: null, venue: null, busy: false };
+
+  function esc(s) { return PORTAL.esc(s); }
+  function eur(c) { return PORTAL.eur(c); }
+
+  /* ---------- Render ---------- */
+  function renderPage() {
+    var venue = S.venue ? S.venue.club : null;
+    var stripeOk = venue && venue.stripe_account_id;
+
+    return '<div class="page-header"><div><h1>Settings</h1><p>Venue configuration and payment setup.</p></div></div>'
+
+      /* Stripe section */
+      + '<div class="card" style="margin-bottom:16px">'
+      + '<div class="card-header"><h2>Stripe — Payments</h2>'
+      + (stripeOk ? '<span class="badge badge-green">Connected</span>' : '<span class="badge badge-yellow">Not connected</span>')
+      + '</div><div class="card-body" style="display:flex;flex-direction:column;gap:14px">'
+      + (stripeOk
+          ? '<p class="small">Your Stripe account <code style="background:var(--surface2);padding:2px 6px;border-radius:6px">' + esc(venue.stripe_account_id) + '</code> is connected. Payments go directly to your Stripe dashboard.</p>'
+            + '<div style="display:flex;gap:8px;flex-wrap:wrap">'
+            + '<button class="btn btn-secondary btn-sm" data-act="stripe-refresh">Refresh connection</button>'
+            + '</div>'
+          : '<p class="small">Connect your Stripe account to start accepting payments. It takes about 5 minutes — you\'ll need your bank account details and a form of ID.</p>'
+            + '<p class="small" style="color:var(--warn)">⚠ Customers cannot order until this is set up.</p>'
+            + '<button class="btn btn-primary" data-act="stripe-connect">Connect Stripe →</button>'
+        )
+      + '</div></div>'
+
+      /* Drinko fee info */
+      + '<div class="card" style="margin-bottom:16px">'
+      + '<div class="card-header"><h2>Service fee</h2></div>'
+      + '<div class="card-body">'
+      + '<p class="small">Drinko charges customers <b>€' + ((venue && venue.service_fee_cents) ? (venue.service_fee_cents / 100).toFixed(2) : '0.40') + '</b> per order as a service fee. This is shown clearly to customers at checkout and collected by Drinko. Your venue receives 100% of the drink price.</p>'
+      + '<p class="small" style="margin-top:8px;color:var(--muted)">The service fee is set by Drinko and cannot be changed. Contact us if you need a custom arrangement.</p>'
+      + '</div></div>'
+
+      /* Venue details */
+      + '<div class="card" style="margin-bottom:16px">'
+      + '<div class="card-header"><h2>Venue details</h2></div>'
+      + '<div class="card-body"><form id="venue-form" style="display:flex;flex-direction:column;gap:14px">'
+      + '<div class="form-group"><label>Venue name</label><input class="input" id="v-name" value="' + esc((venue && venue.name) || '') + '" required maxlength="60"></div>'
+      + '<div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn btn-primary btn-sm" type="submit" id="v-save"' + (S.busy ? ' disabled' : '') + '>' + (S.busy ? 'Saving…' : 'Save') + '</button></div>'
+      + '</form></div></div>'
+
+      /* Venue ID */
+      + '<div class="card">'
+      + '<div class="card-header"><h2>Venue ID</h2></div>'
+      + '<div class="card-body">'
+      + '<p class="small">Your venue ID is <code style="background:var(--surface2);padding:2px 6px;border-radius:6px">' + esc((venue && venue.id) || '') + '</code>. This appears in all customer links and QR codes and cannot be changed.</p>'
+      + '</div></div>';
+  }
+
+  function render() {
+    var root = document.getElementById('root');
+    root.innerHTML = '<div class="portal">' + PORTAL.renderNav('setup.html', S.venue && S.venue.club.name, S.venue && S.venue.role) + '<div class="portal-main"><div class="portal-content">' + renderPage() + '</div></div></div>';
+    var logoutBtn = document.getElementById('nav-logout');
+    if (logoutBtn) logoutBtn.addEventListener('click', function () { PORTAL.signOut(); });
+    // Check if returning from Stripe
+    var qs = new URLSearchParams(location.search);
+    if (qs.get('stripe_done')) {
+      PORTAL.toast('Stripe connection updated. Refreshing…');
+      PORTAL.getVenue(S.session).then(function (v) { S.venue = v; render(); });
+      history.replaceState(null, '', location.pathname);
+    }
+  }
+
+  /* ---------- Events ---------- */
+  document.addEventListener('click', function (e) {
+    var el = e.target.closest('[data-act]');
+    if (!el) return;
+    if (el.dataset.act === 'stripe-connect' || el.dataset.act === 'stripe-refresh') {
+      el.disabled = true; el.textContent = 'Please wait…';
+      PORTAL.fn(S.session, 'connect-link', { club: S.venue.club.id }).then(function (j) {
+        location.href = j.url;
+      }).catch(function (er) { PORTAL.toast(er.message, 'error'); el.disabled = false; el.textContent = el.dataset.act === 'stripe-connect' ? 'Connect Stripe →' : 'Refresh connection'; });
+    }
+  });
+
+  document.addEventListener('submit', function (e) {
+    if (e.target.id === 'venue-form') {
+      e.preventDefault();
+      var name = document.getElementById('v-name').value.trim();
+      if (!name) { PORTAL.toast('Venue name cannot be empty.', 'error'); return; }
+      S.busy = true; render();
+      PORTAL.api(S.session, 'clubs?id=eq.' + encodeURIComponent(S.venue.club.id), {
+        method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ name: name })
+      }).then(function () {
+        S.venue.club.name = name; S.busy = false; PORTAL.toast('Venue name saved.'); render();
+      }).catch(function (er) { S.busy = false; PORTAL.toast(er.message, 'error'); render(); });
+    }
+  });
+
+  /* ---------- Boot ---------- */
+  S.session = PORTAL.loadSession();
+  if (!PORTAL.requireAuth(S.session)) return;
+  PORTAL.getVenue(S.session).then(function (v) {
+    S.venue = v;
+    if (!v) { location.href = 'index.html'; return; }
+    render();
+  }).catch(function () { location.href = 'index.html'; });
+})();
+</script>
+</body>
+</html>
