@@ -1,0 +1,14 @@
+{
+  "name": "drinko",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/start.mjs",
+    "dev": "node scripts/start.mjs",
+    "deploy:functions": "supabase functions deploy --no-verify-jwt",
+    "db:migrate": "supabase db push"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
