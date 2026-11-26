@@ -7,6 +7,7 @@ import * as webhook from '../supabase/functions/stripe-webhook/index.ts';
 import * as link from '../supabase/functions/connect-link/index.ts';
 import * as adminMenu from '../supabase/functions/admin-menu/index.ts';
 import * as refund from '../supabase/functions/refund-order/index.ts';
+import * as acceptInvite from '../supabase/functions/accept-invite/index.ts';
 
 let passed = 0;
 async function test(name, fn) {
@@ -350,6 +351,83 @@ await test('connect-link: se il locale ha già l’account non ne crea un altro'
   const res = await link.handle(post('https://f', { club: 'aurora' }, { 'x-admin-key': 'chiave-admin' }), ENV, f);
   assert.equal((await res.json()).account, 'acct_esistente');
   assert.ok(!calls.some((c) => c.url.endsWith('/v1/accounts')));
+});
+
+// ---------- accept-invite ----------
+const INVITE_TOKEN = 'a'.repeat(48);
+const NOW_INV = Date.parse('2026-11-26T12:00:00Z');
+function makeInviteFetch({ email = 'staff@bar.it', invite = {}, inStaff = false, claimOk = true, staffOk = true } = {}) {
+  const calls = [];
+  const inv = { id: 'inv1', club_id: 'aurora', email: 'staff@bar.it', role: 'barista', used_at: null, expires_at: '2026-12-01T00:00:00Z', ...invite };
+  const f = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    const u = String(url);
+    if (u.endsWith('/auth/v1/user')) return ok({ id: 'user1', email });
+    if (u.includes('/rest/v1/venue_invites?token=')) return ok(invite === null ? [] : [inv]);
+    if (u.includes('/rest/v1/staff?user_id=')) return ok(inStaff ? [{ club_id: 'altro' }] : []);
+    if (u.includes('/rest/v1/venue_invites?id=') && init.method === 'PATCH') {
+      const isClaim = JSON.parse(init.body).used_at !== null;
+      return isClaim ? ok(claimOk ? [{ id: 'inv1' }] : []) : new Response(null, { status: 204 });
+    }
+    if (u.endsWith('/rest/v1/staff') && init.method === 'POST') return staffOk ? new Response(null, { status: 201 }) : new Response('{}', { status: 500 });
+    return new Response('{}', { status: 404 });
+  };
+  return { f, calls };
+}
+const acceptReq = (token = INVITE_TOKEN, auth = 'Bearer jwt') =>
+  post('https://f', { token }, auth ? { authorization: auth } : {});
+
+await test('accept-invite: collega l’utente al locale con il ruolo invitato', async () => {
+  const { f, calls } = makeInviteFetch();
+  const res = await acceptInvite.handle(acceptReq(), ENV, f, NOW_INV);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { club_id: 'aurora', role: 'barista' });
+  const ins = calls.find((c) => c.url.endsWith('/rest/v1/staff') && c.init.method === 'POST');
+  assert.deepEqual(JSON.parse(ins.init.body), { user_id: 'user1', club_id: 'aurora', role: 'barista' });
+});
+await test('accept-invite: senza login risponde 401', async () => {
+  const { f } = makeInviteFetch();
+  assert.equal((await acceptInvite.handle(acceptReq(INVITE_TOKEN, ''), ENV, f, NOW_INV)).status, 401);
+});
+await test('accept-invite: rifiuta un token malformato', async () => {
+  const { f } = makeInviteFetch();
+  assert.equal((await acceptInvite.handle(acceptReq('../x'), ENV, f, NOW_INV)).status, 400);
+});
+await test('accept-invite: token sconosciuto → 404', async () => {
+  const { f } = makeInviteFetch({ invite: null });
+  assert.equal((await acceptInvite.handle(acceptReq(), ENV, f, NOW_INV)).status, 404);
+});
+await test('accept-invite: invito scaduto → 410', async () => {
+  const { f } = makeInviteFetch({ invite: { expires_at: '2026-11-01T00:00:00Z' } });
+  assert.equal((await acceptInvite.handle(acceptReq(), ENV, f, NOW_INV)).status, 410);
+});
+await test('accept-invite: invito già usato → 410', async () => {
+  const { f } = makeInviteFetch({ invite: { used_at: '2026-11-25T00:00:00Z' } });
+  assert.equal((await acceptInvite.handle(acceptReq(), ENV, f, NOW_INV)).status, 410);
+});
+await test('accept-invite: email diversa da quella invitata → 403, nessuna scrittura', async () => {
+  const { f, calls } = makeInviteFetch({ email: 'altro@bar.it' });
+  assert.equal((await acceptInvite.handle(acceptReq(), ENV, f, NOW_INV)).status, 403);
+  assert.ok(!calls.some((c) => c.init.method === 'PATCH' || c.init.method === 'POST'));
+});
+await test('accept-invite: l’email si confronta senza badare alle maiuscole', async () => {
+  const { f } = makeInviteFetch({ email: 'Staff@Bar.IT' });
+  assert.equal((await acceptInvite.handle(acceptReq(), ENV, f, NOW_INV)).status, 200);
+});
+await test('accept-invite: chi ha già un locale → 409', async () => {
+  const { f } = makeInviteFetch({ inStaff: true });
+  assert.equal((await acceptInvite.handle(acceptReq(), ENV, f, NOW_INV)).status, 409);
+});
+await test('accept-invite: se qualcuno lo usa nel frattempo → 410 e nessuna riga staff', async () => {
+  const { f, calls } = makeInviteFetch({ claimOk: false });
+  assert.equal((await acceptInvite.handle(acceptReq(), ENV, f, NOW_INV)).status, 410);
+  assert.ok(!calls.some((c) => c.url.endsWith('/rest/v1/staff') && c.init.method === 'POST'));
+});
+await test('accept-invite: se la riga staff fallisce, l’invito torna utilizzabile', async () => {
+  const { f, calls } = makeInviteFetch({ staffOk: false });
+  assert.equal((await acceptInvite.handle(acceptReq(), ENV, f, NOW_INV)).status, 500);
+  const patches = calls.filter((c) => c.init.method === 'PATCH');
+  assert.equal(JSON.parse(patches[patches.length - 1].init.body).used_at, null);
 });
 
 console.log(`\n${passed} prove superate`);

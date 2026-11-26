@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Drinko · Join a venue</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&display=swap">
+<link rel="stylesheet" href="../style.css">
+<script src="../config.js"></script>
+<script src="portal.js"></script>
+</head>
+<body class="portal-body">
+<div id="root"></div>
+<div id="portal-toast" class="portal-toast"></div>
+
+<script>
+(function () {
+  var params = new URLSearchParams(location.search);
+  var inviteToken = params.get('token') || '';
+  var S = { session: null, tab: 'signup', err: '', info: '', busy: false, done: null };
+
+  function esc(s) { return PORTAL.esc(s); }
+  function root() { return document.getElementById('root'); }
+
+  function shell(inner) {
+    return '<div class="auth-wrap"><div class="auth-box"><div class="auth-logo">Drinko</div>' + inner + '</div></div>';
+  }
+
+  function viewInvalid() {
+    return shell('<h1>Invalid invite</h1><p class="sub">This link is missing its invite code. Ask your manager to send a new invite.</p>');
+  }
+
+  function viewAuth() {
+    var isLogin = S.tab === 'login';
+    return shell(
+      '<h1>Join your team</h1>'
+      + '<p class="sub">Use the <b>same email address the invite was sent to</b>.</p>'
+      + '<div class="auth-tabs">'
+      + '<button class="auth-tab' + (!isLogin ? ' active' : '') + '" data-act="tab" data-v="signup">Create account</button>'
+      + '<button class="auth-tab' + (isLogin ? ' active' : '') + '" data-act="tab" data-v="login">I already have one</button>'
+      + '</div>'
+      + (S.err ? '<div class="err">' + esc(S.err) + '</div>' : '')
+      + (S.info ? '<p class="small" style="color:var(--ok)">' + esc(S.info) + '</p>' : '')
+      + '<form id="auth-form">'
+      + '<div class="form-group"><label for="email">Email</label><input class="input" id="email" type="email" autocomplete="username" required></div>'
+      + '<div class="form-group"><label for="pw">Password</label><input class="input" id="pw" type="password" autocomplete="' + (isLogin ? 'current' : 'new') + '-password" required minlength="8"></div>'
+      + '<button class="btn btn-primary" style="width:100%;justify-content:center" type="submit"' + (S.busy ? ' disabled' : '') + '>'
+      + (S.busy ? 'Please wait…' : (isLogin ? 'Sign in and join' : 'Create account and join')) + '</button>'
+      + '</form>'
+    );
+  }
+
+  function viewDone() {
+    var role = S.done && S.done.role === 'manager' ? 'manager' : 'bartender';
+    var target = S.done && S.done.role === 'manager' ? 'index.html' : '../bar.html';
+    return shell(
+      '<h1>You\'re in!</h1>'
+      + '<p class="sub">You joined as <b>' + esc(role) + '</b>.</p>'
+      + '<a class="btn btn-primary" style="width:100%;justify-content:center" href="' + target + '">'
+      + (S.done && S.done.role === 'manager' ? 'Open the venue portal' : 'Open the bar view') + '</a>'
+    );
+  }
+
+  function render() {
+    if (!inviteToken) { root().innerHTML = viewInvalid(); return; }
+    root().innerHTML = S.done ? viewDone() : viewAuth();
+  }
+
+  function accept() {
+    S.busy = true; S.err = ''; render();
+    return PORTAL.fn(S.session, 'accept-invite', { token: inviteToken }).then(function (r) {
+      S.busy = false; S.done = r; render();
+    }).catch(function (e) {
+      S.busy = false; S.err = e.message; render();
+    });
+  }
+
+  document.addEventListener('click', function (e) {
+    var el = e.target.closest('[data-act="tab"]');
+    if (el) { S.tab = el.dataset.v; S.err = ''; S.info = ''; render(); }
+  });
+
+  document.addEventListener('submit', function (e) {
+    if (e.target.id !== 'auth-form') return;
+    e.preventDefault();
+    var email = document.getElementById('email').value.trim();
+    var pw = document.getElementById('pw').value;
+    S.busy = true; S.err = ''; S.info = ''; render();
+
+    var login = function () {
+      return PORTAL.authCall('password', { email: email, password: pw }).then(function (s) {
+        S.session = s; PORTAL.saveSession(s);
+        return accept();
+      });
+    };
+
+    var start = S.tab === 'signup'
+      ? PORTAL.signUp(email, pw).then(function (j) {
+          // If email confirmation is required there is no session yet
+          if (j && j.access_token) {
+            S.session = {
+              access_token: j.access_token, refresh_token: j.refresh_token,
+              user_id: j.user && j.user.id, expires_at: Date.now() + (j.expires_in || 3600) * 1000 - 60000
+            };
+            PORTAL.saveSession(S.session);
+            return accept();
+          }
+          return login().catch(function () {
+            S.busy = false; S.tab = 'login';
+            S.info = 'Check your inbox to confirm your email, then sign in here.';
+            render();
+          });
+        })
+      : login();
+
+    start.catch(function (err) { S.busy = false; S.err = err.message; render(); });
+  });
+
+  // Already logged in on this browser? Try to join straight away.
+  var existing = PORTAL.loadSession();
+  if (inviteToken && existing && existing.access_token) {
+    S.session = existing;
+    accept();
+  } else {
+    render();
+  }
+})();
+</script>
+</body>
+</html>

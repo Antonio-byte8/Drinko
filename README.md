@@ -103,12 +103,14 @@ web/
     qr.html       Generate QR codes
     setup.html    Stripe + settings
     staff.html    Invite staff
+    accept-invite.html  Page staff open from their invite link
   style.css       Design system (dark theme)
   config.js       Supabase URL + anon key (auto-written by npm start)
 supabase/
   schema.sql      Database (run once)
   schema_v2.sql   Migration (run after schema.sql)
   functions/      Supabase Edge Functions (Deno/TypeScript)
+                  incl. invite-staff + accept-invite (email-matched, single-use, 7-day invites)
 scripts/
   start.mjs       Local dev launcher
 ```
